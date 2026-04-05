@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     {
         // Use a single rank's local portion only for this test
         const int m = 64, n = 64, k = 64;
-        if (d.M_local >= m || info.size == 1) {
+        if (d.N_local >= m || info.size == 1) {
             std::vector<float> A(m*k, 0.f), B(k*n, 0.f), C(m*n, 0.f), Cref(m*n, 0.f);
             for (int i = 0; i < m && i < k; ++i) A[i*k+i] = 1.f;   // identity-like
             for (int i = 0; i < k; ++i)

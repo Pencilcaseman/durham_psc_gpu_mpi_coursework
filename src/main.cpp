@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
         MPI_Allreduce(&local_ref, &global_ref, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 
         // Tolerance: single-precision epsilon * sqrt(N) is a conservative bound
-        float tol = 1e-3f * std::sqrtf((float)N);
+        float tol = 1e-3f * std::sqrt((float)N);
         float err = std::fabs(global_gpu - global_ref);
 
         if (info.rank == 0)
@@ -235,11 +235,11 @@ int main(int argc, char** argv) {
             launch_gemm_tiled16(d.M_local, Nmat, K, dA, dB, dC, stream);
         float comp_ms = gt.stop(stream);
 
-        CUDA_CHECK(cudaMemcpyAsync(A_local.data()/* reuse buffer */,
+        std::vector<float> C_local((size_t)d.M_local * Nmat);
+        CUDA_CHECK(cudaMemcpyAsync(C_local.data(),
                                    dC, (size_t)d.M_local*Nmat*sizeof(float),
                                    cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
-        auto& C_local = A_local;   // alias for clarity
 
         // Validation (only for small matrices to keep CI fast)
         float err = -1.f;
