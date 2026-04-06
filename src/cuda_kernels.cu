@@ -132,6 +132,9 @@ __global__ void reduce_sum_inner(const float *__restrict__ x, int n, float *__re
     // scratch[0..gridDim.x - 1] now contains partial sums of each block.
 }
 
+// Each thread loads UNROLL float4s per grid-stride iteration (= UNROLL*4 floats),
+// increasing instruction-level parallelism and memory requests in flight.
+template<int UNROLL = 4>
 __global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, float *__restrict__ scratch) {
     // Requires blockDim.x <= 1024 -- see below
 
@@ -140,13 +143,20 @@ __global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, flo
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    // Leaves us with blockDim.x sums
-    for (int i = idx; i < n; i += stride) {
+    // Unrolled grid-stride loop: each iteration loads UNROLL float4s
+    int i = idx;
+    for (; i + stride * (UNROLL - 1) < n; i += stride * UNROLL) {
+#pragma unroll
+        for (int u = 0; u < UNROLL; ++u) {
+            float4 tmp = __ldg(&x[i + stride * u]);
+            sum += tmp.x + tmp.y + tmp.z + tmp.w;
+        }
+    }
+
+    // Remainder: handle leftover float4s that didn't fit in the unrolled loop
+    for (; i < n; i += stride) {
         float4 tmp = __ldg(&x[i]);
-        sum += tmp.x;
-        sum += tmp.y;
-        sum += tmp.z;
-        sum += tmp.w;
+        sum += tmp.x + tmp.y + tmp.z + tmp.w;
     }
 
     // Must be ceil(blockDim.x / warpSize) elements long
@@ -197,7 +207,9 @@ float gpu_reduce_sum(
     const int float4_elements = float4_size / 4;
 
     const int block_dim = 1024;
-    const int grid_dim  = std::min((float4_elements + block_dim - 1) / block_dim, int {1024});
+    // Fewer blocks = more work per thread via grid-stride loop. 256 blocks is
+    // enough to saturate the GPU while keeping the second pass trivially small.
+    const int grid_dim  = std::min((float4_elements + block_dim - 1) / block_dim, 256);
 
     float tail[4] = {0, 0, 0, 0};
 
