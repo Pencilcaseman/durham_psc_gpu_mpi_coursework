@@ -87,7 +87,7 @@ __inline__ __device__ float warp_reduce_sum(float sum) {
     return sum;
 }
 
-__global__ void reduce_sum_inner(float *__restrict__ x, size_t n, float *__restrict__ scratch) {
+__global__ void reduce_sum_inner(const float *__restrict__ x, size_t n, float *__restrict__ scratch) {
     // Requires blockDim.x <= 1024 -- see below
 
     float sum = 0;

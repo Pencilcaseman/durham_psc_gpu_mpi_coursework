@@ -3,10 +3,11 @@
  * Run with:  mpirun -np <P> ./mpi_cuda_tests
  */
 
-#include <coursework/mpi_utils.hpp>
 #include <coursework/check_cuda.hpp>
-#include <coursework/kernels.hpp>
 #include <coursework/cpu_reference.hpp>
+#include <coursework/kernels.hpp>
+#include <coursework/mpi_utils.hpp>
+#include <coursework/util.hpp>
 
 #include <iostream>
 #include <vector>
@@ -64,17 +65,19 @@ int main(int argc, char** argv) {
         // All elements == 1  →  global sum == N
         std::vector<float> x(d.N_local, 1.f);
         float* dx = nullptr;
+        float *scratch = util::cuda_malloc_checked<float>(1024);
         CUDA_CHECK(cudaMalloc(&dx, d.N_local*sizeof(float)));
         CUDA_CHECK(cudaMemcpyAsync(dx, x.data(), d.N_local*sizeof(float), cudaMemcpyHostToDevice, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
-        float local  = gpu_reduce_sum(dx, (int)d.N_local, stream);
+        float local  = gpu_reduce_sum(dx, (int)d.N_local, stream, scratch);
         float global = 0.f;
         MPI_Allreduce(&local, &global, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 
         if (info.rank == 0)
             report("Reduction global sum", std::fabs(global - (float)N) < 0.5f);
         CUDA_CHECK(cudaFree(dx));
+        CUDA_CHECK(cudaFree(scratch));
     }
 
     // ── Test 3: Tiled GEMM 32×32 identity-like check ─────────────────────────
