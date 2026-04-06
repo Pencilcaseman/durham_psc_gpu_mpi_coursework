@@ -26,11 +26,11 @@ void launch_copy(
 // ── Part A2: parallel reduction
 // ───────────────────────────────────────────────
 float gpu_reduce_sum(
-        const float *device_x,
-        int n,
-        float *scratch,
-        cudaStream_t stream = 0
-    );
+    const float *device_x,
+    int n,
+    float *scratch,
+    cudaStream_t stream = 0
+);
 
 // ── Part B: GEMM
 // ──────────────────────────────────────────────────────────────
