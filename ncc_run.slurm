@@ -22,21 +22,21 @@ echo "========================================================================="
 echo "AXPY"
 echo "========================================================================="
 srun -n 1 slurm_build/mpi_cuda_coursework \
-    --mode axpy --N 50000000 --alpha 3.1415926 \
+    --mode axpy --N 500000000 --alpha 3.1415926 \
     --csv results.csv
 
 echo "========================================================================="
 echo "ADD"
 echo "========================================================================="
 srun -n 1 slurm_build/mpi_cuda_coursework \
-    --mode add --N 50000000 \
+    --mode add --N 500000000 \
     --csv results.csv
 
 echo "========================================================================="
 echo "COPY"
 echo "========================================================================="
 srun -n 1 slurm_build/mpi_cuda_coursework \
-    --mode copy --N 50000000 \
+    --mode copy --N 500000000 \
     --csv results.csv
 
 # srun -n 2 slurm_build/mpi_cuda_coursework \
