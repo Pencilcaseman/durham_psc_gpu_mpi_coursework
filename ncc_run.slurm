@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=mpi-cuda-run
-#SBATCH --partition=gpu
+#SBATCH --partition=ug-gpu-small
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:turing:1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=00:05:00
-#SBATCH --output=slurm-%j.out
+#SBATCH --output=slurm_output/slurm-%j.out
 
 set -euxo pipefail
 

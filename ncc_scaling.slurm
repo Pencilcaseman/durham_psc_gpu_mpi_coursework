@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=mpi-cuda-scaling
-#SBATCH --partition=gpu
+#SBATCH --partition=ug-gpu-small
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:turing:1        # single GPU shared by all ranks
