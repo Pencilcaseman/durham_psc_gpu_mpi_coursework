@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cuda_runtime.h>
 
 namespace util {
     void exit_with(const char *msg) {
