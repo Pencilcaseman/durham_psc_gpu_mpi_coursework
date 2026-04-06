@@ -26,7 +26,7 @@ void launch_copy(
 // ── Part A2: parallel reduction
 // ───────────────────────────────────────────────
 float gpu_reduce_sum(const float *d_x, int n, cudaStream_t stream = 0);
-float gpu_reduce_sum2(float *d_x, int n, cudaStream_t stream = 0);
+float gpu_reduce_sum2(float *d_x, size_t n, cudaStream_t stream = 0);
 
 // ── Part B: GEMM
 // ──────────────────────────────────────────────────────────────
