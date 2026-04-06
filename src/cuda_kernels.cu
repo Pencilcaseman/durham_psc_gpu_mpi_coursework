@@ -328,9 +328,9 @@ void launch_gemm_tiled16(
     const float *B,
     float *C,
     cudaStream_t stream) {
-    constexpr int T = 16;
+    constexpr int T = 32;
     dim3 block(T, T);
     dim3 grid((N + T - 1) / T, (M + T - 1) / T);
     k_gemm_tiled<T><<<grid, block, 0, stream>>>(M, N, K, A, B, C);
-    CUDA_CHECK_LAST("k_gemm_tiled<16>");
+    CUDA_CHECK_LAST("k_gemm_tiled<32>");
 }

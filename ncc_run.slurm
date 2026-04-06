@@ -52,12 +52,12 @@ echo "========================================================================="
 echo "GEMM (naive)"
 echo "========================================================================="
 mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
-    --mode gemm --M 1024 --N 1024 --K 1024 \
+    --mode gemm --M 4096 --N 4096 --K 4096 \
     --kernel naive --csv results.csv
 
 echo "========================================================================="
 echo "GEMM (tiled)"
 echo "========================================================================="
 mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
-    --mode gemm --M 1024 --N 1024 --K 1024 \
+    --mode gemm --M 4096 --N 4096 --K 4096 \
     --kernel tiled --csv results.csv
