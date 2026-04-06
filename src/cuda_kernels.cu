@@ -1,6 +1,8 @@
 #include <coursework/kernels.hpp>
 #include <coursework/check_cuda.hpp>
+#include <coursework/util.hpp>
 
+#include <cmath>
 #include <cuda_runtime.h>
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -133,6 +135,77 @@ float gpu_reduce_sum(const float *d_x, int n, cudaStream_t stream) {
     CUDA_CHECK(cudaStreamSynchronize(stream));
     CUDA_CHECK(cudaFree(d_partials));
     return h;
+}
+
+
+__inline__ __device__ float warp_reduce_sum(float sum) {
+    sum += __shfl_down_sync(0xFFFFFFFF, sum, 16);
+    sum += __shfl_down_sync(0xFFFFFFFF, sum, 8);
+    sum += __shfl_down_sync(0xFFFFFFFF, sum, 4);
+    sum += __shfl_down_sync(0xFFFFFFFF, sum, 2);
+    sum += __shfl_down_sync(0xFFFFFFFF, sum, 1);
+
+    return sum;
+}
+
+__global__ void reduce_sum_inner(float *__restrict__ x, size_t n) {
+    // Requires blockDim.x <= 1024 -- see below
+
+    float sum = 0;
+
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    // Leaves us with blockDim.x sums
+    for (size_t i = idx; i < n; i += stride) {
+        sum += x[i];
+    }
+
+    // Must be ceil(blockDim.x / warpSize) elements long
+    // blockDim.x == 1024 => 32 elements
+    __shared__ float shared_sums[32];
+
+    size_t warp_idx = threadIdx.x / warpSize;
+    size_t lane_idx = threadIdx.x % warpSize;
+
+    // Reduces blockDim.x sums into blockDim.x / warpSize sums.
+    // lane 0 in each warp holds the sum
+    sum = warp_reduce_sum(sum);
+
+    if (lane_idx == 0) {
+        shared_sums[warp_idx] = sum;
+    }
+
+    __syncthreads();
+
+    // Currently have e.g. 32 numbers to sum.
+    // Only first warp in a block needs to do this
+
+    if (warp_idx == 0) {
+        sum = lane_idx < blockDim.x / warpSize ? shared_sums[lane_idx] : 0.0f;
+        sum = warp_reduce_sum(sum);
+
+        if (lane_idx == 0) {
+            x[blockIdx.x] = sum;
+        }
+    }
+
+    // x[0..gridDim.x - 1] now contains partial sums of each block.
+}
+
+float gpu_reduce_sum2(float *device_x, size_t n, cudaStream_t stream) {
+    const size_t block_dim = 1024;
+    const size_t grid_dim  = std::min((n + block_dim - 1) / block_dim, 1024ULL);
+
+    reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n);
+    CUDA_CHECK_LAST("reduce_sum_inner");
+
+    reduce_sum_inner<<<1, block_dim, 0, stream>>>(device_x, grid_dim);
+    CUDA_CHECK_LAST("reduce_sum_inner");
+
+    float res = 0;
+    util::cuda_memcpy_checked(&res, device_x, 1, cudaMemcpyDeviceToHost);
+    return res;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

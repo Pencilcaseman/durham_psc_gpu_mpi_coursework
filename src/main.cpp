@@ -355,6 +355,15 @@ int main(int argc, char **argv) {
             dx, x.data(), d.N_local, cudaMemcpyHostToDevice, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
+        // Warm-up (not timed)
+        gpu_reduce_sum(dx, (int)d.N_local, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Re-upload data since reduce allocates/frees temp buffers
+        util::cuda_memcpy_checked(
+            dx, x.data(), d.N_local, cudaMemcpyHostToDevice, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
         GpuTimer gt;
         gt.start(stream);
         float local_gpu = gpu_reduce_sum(dx, (int)d.N_local, stream);
