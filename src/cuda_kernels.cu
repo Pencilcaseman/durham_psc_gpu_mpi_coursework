@@ -132,6 +132,55 @@ __global__ void reduce_sum_inner(const float *__restrict__ x, int n, float *__re
     // scratch[0..gridDim.x - 1] now contains partial sums of each block.
 }
 
+__global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, float *__restrict__ scratch) {
+    // Requires blockDim.x <= 1024 -- see below
+
+    float sum = 0;
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    // Leaves us with blockDim.x sums
+    for (int i = idx; i < n; i += stride) {
+        float4 tmp = __ldg(&x[i]);
+        sum += tmp.x;
+        sum += tmp.y;
+        sum += tmp.z;
+        sum += tmp.w;
+    }
+
+    // Must be ceil(blockDim.x / warpSize) elements long
+    // blockDim.x == 1024 => 32 elements
+    __shared__ float shared_sums[32];
+
+    int warp_idx = threadIdx.x / warpSize;
+    int lane_idx = threadIdx.x % warpSize;
+
+    // Reduces blockDim.x sums into blockDim.x / warpSize sums.
+    // lane 0 in each warp holds the sum
+    sum = warp_reduce_sum(sum);
+
+    if (lane_idx == 0) {
+        shared_sums[warp_idx] = sum;
+    }
+
+    __syncthreads();
+
+    // Currently have e.g. 32 numbers to sum.
+    // Only first warp in a block needs to do this
+
+    if (warp_idx == 0) {
+        sum = lane_idx < blockDim.x / warpSize ? shared_sums[lane_idx] : 0.0f;
+        sum = warp_reduce_sum(sum);
+
+        if (lane_idx == 0) {
+            scratch[blockIdx.x] = sum;
+        }
+    }
+
+    // scratch[0..gridDim.x - 1] now contains partial sums of each block.
+}
+
 // The scratch buffer must be 1024 elements long and will be modified during the
 // execution of this function. If multiple instances of this function are called
 // in parallel, each must use a separate, non-overlapping scratch buffer to
@@ -142,17 +191,44 @@ float gpu_reduce_sum(
         float *__restrict__ scratch,
         cudaStream_t stream
     ) {
+
+    const int tail_size = n % 4;
+    const int float4_size = n - tail_size;
+    const int float4_elements = float4_size / 4;
+
     const int block_dim = 1024;
-    const int grid_dim  = std::min((n + block_dim - 1) / block_dim, int {1024});
+    const int grid_dim  = std::min((float4_elements + block_dim - 1) / block_dim, int {1024});
 
-    reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n, scratch);
-    CUDA_CHECK_LAST("reduce_sum_inner");
+    float tail[4] = {0, 0, 0, 0};
 
-    reduce_sum_inner<<<1, block_dim, 0, stream>>>(scratch, grid_dim, scratch);
-    CUDA_CHECK_LAST("reduce_sum_inner");
+    CUDA_CHECK(cudaMemcpyAsync(
+        &tail,
+        device_x + float4_size,
+        tail_size * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream
+    ));
 
-    float res = 0;
-    util::cuda_memcpy_checked(&res, scratch, 1, cudaMemcpyDeviceToHost, stream);
+    if (n > 4) {
+        reduce_sum_inner_float4<<<grid_dim, block_dim, 0, stream>>>(
+            reinterpret_cast<const float4*>(device_x),
+            float4_elements,
+            scratch
+        );
+
+        CUDA_CHECK_LAST("reduce_sum_inner");
+
+        reduce_sum_inner<<<1, block_dim, 0, stream>>>(scratch, grid_dim, scratch);
+        CUDA_CHECK_LAST("reduce_sum_inner");
+
+        float res = 0;
+        util::cuda_memcpy_checked(&res, scratch, 1, cudaMemcpyDeviceToHost, stream);
+    }
+
+    res += tail[0];
+    res += tail[1];
+    res += tail[2];
+    res += tail[3];
 
     return res;
 }
