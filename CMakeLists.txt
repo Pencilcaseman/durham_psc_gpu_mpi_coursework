@@ -46,7 +46,7 @@ set_target_properties(
     PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_ARCHITECTURES
-            "70;80" # Adjust to your GPU (e.g. 70=V100, 80=A100)
+            "61;70;75;80" # 61=Titan Xp, 70=V100, 75=Turing, 80=A100
 )
 
 target_compile_options(
@@ -68,5 +68,5 @@ endif()
 
 set_target_properties(
     mpi_cuda_tests
-    PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES "70;80"
+    PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES "61;70;75;80"
 )

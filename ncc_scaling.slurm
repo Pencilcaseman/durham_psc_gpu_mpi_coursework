@@ -3,13 +3,14 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=1          # single GPU shared by all ranks
+#SBATCH --gres=gpu:turing:1        # single GPU shared by all ranks
 #SBATCH --cpus-per-task=4
 #SBATCH --time=00:30:00
 #SBATCH --output=scaling-%j.out
 
 module purge
-module load cuda openmpi cmake
+module load cuda
+module load intel-oneapi/2024.1.0/mpi
 
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
