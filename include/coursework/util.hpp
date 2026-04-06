@@ -5,11 +5,7 @@
 #include <cuda_runtime.h>
 
 namespace util {
-    void exit_with(const char *msg) {
-        std::fprintf( stderr, msg);
-        std::fflush(stderr);
-        std::exit(EXIT_FAILURE);
-    }
+    void exit_with(const char *msg);
 
     template<typename T>
     T *cuda_malloc_checked(size_t n) {
