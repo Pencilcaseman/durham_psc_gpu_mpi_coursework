@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaMemcpyAsync(dx, x.data(), d.N_local*sizeof(float), cudaMemcpyHostToDevice, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
-        float local  = gpu_reduce_sum(dx, (int)d.N_local, stream, scratch);
+        float local  = gpu_reduce_sum(dx, (int)d.N_local, scratch, stream);
         float global = 0.f;
         MPI_Allreduce(&local, &global, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 
