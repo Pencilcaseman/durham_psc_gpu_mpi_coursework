@@ -93,6 +93,7 @@ __global__ void k_reduce_block_sum(
         }
         __syncthreads();
     }
+
     if (tid == 0) {
         partials[blockIdx.x] = sdata[0];
     }

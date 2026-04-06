@@ -350,14 +350,9 @@ int main(int argc, char **argv) {
         std::vector<float> x(d.N_local);
         fill_random(x, 3000 + info.rank);
 
-        float *dx = nullptr;
-        CUDA_CHECK(cudaMalloc(&dx, d.N_local * sizeof(float)));
-        CUDA_CHECK(cudaMemcpyAsync(
-            dx,
-            x.data(),
-            d.N_local * sizeof(float),
-            cudaMemcpyHostToDevice,
-            stream));
+        float *dx = util::cuda_malloc_checked<float>(d.N_local);
+        util::cuda_memcpy_checked(
+            dx, x.data(), d.N_local, cudaMemcpyHostToDevice, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         GpuTimer gt;
