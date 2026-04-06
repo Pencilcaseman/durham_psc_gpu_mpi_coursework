@@ -45,7 +45,7 @@ echo "========================================================================="
 echo "REDUCE"
 echo "========================================================================="
 srun -n $NUM_RANKS slurm_build/mpi_cuda_coursework \
-    --mode reduce --N 1000000 \
+    --mode reduce --N 50000000 \
     --csv results.csv
 
 # srun -n 2 slurm_build/mpi_cuda_coursework \
