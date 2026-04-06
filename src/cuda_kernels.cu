@@ -77,67 +77,6 @@ void launch_copy(int n, const float *x, float *y, cudaStream_t stream) {
 // Part A2 – Parallel reduction (tree reduction, two-stage)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Stage 1: each block reduces its chunk into a single partial sum
-// TODO (students): you may add warp-level primitives (__shfl_down_sync) here
-__global__ void k_reduce_block_sum(
-    const float *__restrict__ x,
-    float *__restrict__ partials,
-    int n) {
-    __shared__ float sdata[256];
-    int tid    = threadIdx.x;
-    int i      = blockIdx.x * blockDim.x + tid;
-    sdata[tid] = (i < n) ? x[i] : 0.f;
-    __syncthreads();
-
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            sdata[tid] += sdata[tid + stride];
-        }
-        __syncthreads();
-    }
-
-    if (tid == 0) {
-        partials[blockIdx.x] = sdata[0];
-    }
-}
-
-float gpu_reduce_sum(const float *d_x, int n, cudaStream_t stream) {
-    const int block = 256;
-    int grid        = (n + block - 1) / block;
-
-    float *d_partials = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_partials, grid * sizeof(float)));
-    k_reduce_block_sum<<<grid, block, 0, stream>>>(d_x, d_partials, n);
-    CUDA_CHECK_LAST("k_reduce_block_sum");
-
-    // Stage 2+: reduce partial sums until a single value remains
-    while (grid > 1) {
-        int next      = (grid + block - 1) / block;
-        float *d_next = nullptr;
-        CUDA_CHECK(cudaMalloc(&d_next, next * sizeof(float)));
-        k_reduce_block_sum<<<next, block, 0, stream>>>(
-            d_partials,
-            d_next,
-            grid);
-        CUDA_CHECK_LAST("k_reduce_block_sum(iter)");
-        CUDA_CHECK(cudaFree(d_partials));
-        d_partials = d_next;
-        grid       = next;
-    }
-
-    float h = 0.f;
-    CUDA_CHECK(cudaMemcpyAsync(
-        &h,
-        d_partials,
-        sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaFree(d_partials));
-    return h;
-}
-
-
 __inline__ __device__ float warp_reduce_sum(float sum) {
     sum += __shfl_down_sync(0xFFFFFFFF, sum, 16);
     sum += __shfl_down_sync(0xFFFFFFFF, sum, 8);
@@ -193,11 +132,18 @@ __global__ void reduce_sum_inner(float *__restrict__ x, size_t n, float *__restr
     // scratch[0..gridDim.x - 1] now contains partial sums of each block.
 }
 
-float gpu_reduce_sum2(float *device_x, size_t n, cudaStream_t stream) {
+// The scratch buffer must be 1024 elements long and will be modified during the
+// execution of this function. If multiple instances of this function are called
+// in parallel, each must use a separate, non-overlapping scratch buffer to
+// guarantee correct results.
+float gpu_reduce_sum(
+        const float *__restrict__ device_x,
+        size_t n,
+        float *__restrict__ scratch,
+        cudaStream_t stream
+    ) {
     const size_t block_dim = 1024;
     const size_t grid_dim  = std::min((n + block_dim - 1) / block_dim, size_t {1024});
-
-    float *scratch = util::cuda_malloc_checked<float>(grid_dim);
 
     reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n, scratch);
     CUDA_CHECK_LAST("reduce_sum_inner");
@@ -207,7 +153,6 @@ float gpu_reduce_sum2(float *device_x, size_t n, cudaStream_t stream) {
 
     float res = 0;
     util::cuda_memcpy_checked(&res, scratch, 1, cudaMemcpyDeviceToHost, stream);
-    cudaFree(scratch);
 
     return res;
 }

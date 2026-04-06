@@ -347,6 +347,9 @@ int main(int argc, char **argv) {
         long long N = args.get_ll("N", 10'000'000LL);
         auto d      = dist_1d(N, info.rank, info.size);
 
+        // Scratch for reduction
+        std::vector<float> scratch(1024);
+
         std::vector<float> x(d.N_local);
         fill_random(x, 3000 + info.rank);
 
@@ -356,7 +359,7 @@ int main(int argc, char **argv) {
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         // Warm-up (not timed)
-        gpu_reduce_sum2(dx, (int)d.N_local, stream);
+        gpu_reduce_sum(dx, (int)d.N_local, scratch, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         // Re-upload data since reduce allocates/frees temp buffers
@@ -366,7 +369,7 @@ int main(int argc, char **argv) {
 
         GpuTimer gt;
         gt.start(stream);
-        float local_gpu = gpu_reduce_sum2(dx, (int)d.N_local, stream);
+        float local_gpu = gpu_reduce_sum2(dx, (int)d.N_local, scratch, stream);
         float ms        = gt.stop(stream);
 
         // Combine partial sums from all ranks
@@ -409,6 +412,7 @@ int main(int argc, char **argv) {
         append_csv(csv, info.rank, "reduce", "tree", N, 0, 0, 0, ms, 0.0, gbs);
 
         CUDA_CHECK(cudaFree(dx));
+        CUDA_CHECK(cudaFree(scratch));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
