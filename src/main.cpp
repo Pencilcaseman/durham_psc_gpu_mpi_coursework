@@ -28,14 +28,15 @@
 #include <mpi.h>
 #include <cuda_runtime.h>
 
-#include "cli.hpp"
-#include "mpi_utils.hpp"
-#include "mpi_distribution.hpp"
-#include "check_cuda.hpp"
-#include "timer.hpp"
-#include "kernels.hpp"
-#include "cpu_reference.hpp"
-#include "benchmarks.hpp"
+#include <coursework/benchmarks.hpp>
+#include <coursework/check_cuda.hpp>
+#include <coursework/cli.hpp>
+#include <coursework/cpu_reference.hpp>
+#include <coursework/kernels.hpp>
+#include <coursework/mpi_distribution.hpp>
+#include <coursework/mpi_utils.hpp>
+#include <coursework/timer.hpp>
+#include <coursework/util.hpp>
 
 // ── GPU selection
 // ───────────────────────────────────────────────────────────── With a single
@@ -64,6 +65,7 @@ static void fill_random(std::vector<float> &v, int seed) {
 // ─────────────────────────────────────────────────────────────────────────────
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
+
     auto info = mpi_info();
     Args args = Args::parse(argc, argv);
 
@@ -71,8 +73,9 @@ int main(int argc, char **argv) {
     if (mode.empty()) {
         if (info.rank == 0) {
             std::cout
-                << "Usage: --mode axpy|reduce|gemm  [see source for full options]\n";
+                << "Usage: --mode axpy|add|copy|reduce|gemm  [see source for full options]\n";
         }
+
         MPI_Finalize();
         return 0;
     }
@@ -91,39 +94,45 @@ int main(int argc, char **argv) {
         float alpha = (float)args.get_double("alpha", 2.0);
         auto d      = dist_1d(N, info.rank, info.size);
 
-        std::vector<float> x(d.N_local), y(d.N_local), yref(d.N_local);
+        std::vector<float> x(d.N_local);
+        std::vector<float> y(d.N_local);
+        std::vector<float> yref(d.N_local);
+
         fill_random(x, 1000 + info.rank);
         fill_random(y, 2000 + info.rank);
         yref = y;
 
-        float *dx = nullptr, *dy = nullptr;
-        CUDA_CHECK(cudaMalloc(&dx, d.N_local * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&dy, d.N_local * sizeof(float)));
-        CUDA_CHECK(cudaMemcpyAsync(
+        float *dx = util::cuda_malloc_checked<float>(d.N_local);
+        float *dy = util::cuda_malloc_checked<float>(d.N_local);
+
+        util::cuda_memcpy_checked(
             dx,
             x.data(),
-            d.N_local * sizeof(float),
+            d.N_local,
             cudaMemcpyHostToDevice,
-            stream));
-        CUDA_CHECK(cudaMemcpyAsync(
+            stream);
+
+        util::cuda_memcpy_checked(
             dy,
             y.data(),
-            d.N_local * sizeof(float),
+            d.N_local,
             cudaMemcpyHostToDevice,
-            stream));
+            stream);
+
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         // ── Warm-up (not timed)
         // ───────────────────────────────────────────────
         launch_axpy((int)d.N_local, alpha, dx, dy, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
+
         // Re-upload y so timing run starts from a clean state
-        CUDA_CHECK(cudaMemcpyAsync(
+        util::cuda_memcpy_checked(
             dy,
             y.data(),
-            d.N_local * sizeof(float),
+            d.N_local,
             cudaMemcpyHostToDevice,
-            stream));
+            stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         GpuTimer gt;
@@ -131,12 +140,14 @@ int main(int argc, char **argv) {
         launch_axpy((int)d.N_local, alpha, dx, dy, stream);
         float ms = gt.stop(stream);
 
-        CUDA_CHECK(cudaMemcpyAsync(
+        util::cuda_memcpy_checked(
             y.data(),
             dy,
-            d.N_local * sizeof(float),
+            d.N_local,
             cudaMemcpyDeviceToHost,
-            stream));
+            stream
+        );
+
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         cpu_axpy((int)d.N_local, alpha, x.data(), yref.data());
@@ -164,6 +175,165 @@ int main(int argc, char **argv) {
             ms,
             0.0,
             gbs);
+
+        CUDA_CHECK(cudaFree(dx));
+        CUDA_CHECK(cudaFree(dy));
+    }
+
+    else if (mode == "add") {
+        long long N = args.get_ll("N", 10'000'000LL);
+        auto d      = dist_1d(N, info.rank, info.size);
+
+        std::vector<float> x(d.N_local);
+        std::vector<float> y(d.N_local);
+        std::vector<float> z(d.N_local);
+        std::vector<float> zref(d.N_local);
+
+        fill_random(x, 1000 + info.rank);
+        fill_random(y, 2000 + info.rank);
+
+        float *dx = util::cuda_malloc_checked<float>(d.N_local);
+        float *dy = util::cuda_malloc_checked<float>(d.N_local);
+        float *dz = util::cuda_malloc_checked<float>(d.N_local);
+
+        util::cuda_memcpy_checked(
+            dx,
+            x.data(),
+            d.N_local,
+            cudaMemcpyHostToDevice,
+            stream);
+
+        util::cuda_memcpy_checked(
+            dy,
+            y.data(),
+            d.N_local,
+            cudaMemcpyHostToDevice,
+            stream);
+
+        util::cuda_memcpy_checked(
+            dz,
+            z.data(),
+            d.N_local,
+            cudaMemcpyHostToDevice,
+            stream);
+
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // ── Warm-up (not timed)
+        // ───────────────────────────────────────────────
+        launch_add((int)d.N_local, dx, dy, dz, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Re-upload z so timing run starts from a clean state
+        util::cuda_memcpy_checked(
+            dz,
+            z.data(),
+            d.N_local,
+            cudaMemcpyHostToDevice,
+            stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        GpuTimer gt;
+        gt.start(stream);
+
+        launch_add((int)d.N_local, dx, dy, dz, stream);
+
+        float ms = gt.stop(stream);
+
+        util::cuda_memcpy_checked(
+            z.data(),
+            dz,
+            d.N_local,
+            cudaMemcpyDeviceToHost,
+            stream
+        );
+
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        cpu_add((int)d.N_local, x.data(), y.data(), zref.data());
+        float err = max_abs_diff((int)d.N_local, z.data(), zref.data());
+
+        // Effective bandwidth: read x, read y, write z = 3 arrays
+        double bytes = 3.0 * (double)d.N_local * sizeof(float);
+        double gbs   = (bytes / 1e9) / (ms / 1e3);
+
+        if (info.rank == 0) {
+            std::cout << "[ADD] rank=" << info.rank << " N_local=" << d.N_local
+                      << " ms=" << ms << " GB/s=" << gbs << " max_err=" << err
+                      << "\n";
+        }
+
+        append_csv(
+            csv,
+            info.rank,
+            "add",
+            "add",
+            d.N_local,
+            0,
+            0,
+            0,
+            ms,
+            0.0,
+            gbs);
+
+        CUDA_CHECK(cudaFree(dx));
+        CUDA_CHECK(cudaFree(dy));
+        CUDA_CHECK(cudaFree(dz));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Part A1 – COPY
+    // ══════════════════════════════════════════════════════════════════════════
+    else if (mode == "copy") {
+        long long N = args.get_ll("N", 10'000'000LL);
+        auto d      = dist_1d(N, info.rank, info.size);
+
+        std::vector<float> x(d.N_local);
+        std::vector<float> y(d.N_local, 0.f);
+
+        fill_random(x, 1000 + info.rank);
+
+        float *dx = util::cuda_malloc_checked<float>(d.N_local);
+        float *dy = util::cuda_malloc_checked<float>(d.N_local);
+
+        util::cuda_memcpy_checked(
+            dx, x.data(), d.N_local, cudaMemcpyHostToDevice, stream);
+        util::cuda_memcpy_checked(
+            dy, y.data(), d.N_local, cudaMemcpyHostToDevice, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Warm-up
+        launch_copy((int)d.N_local, dx, dy, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // Re-upload y so timing run starts from a clean state
+        util::cuda_memcpy_checked(
+            dy, y.data(), d.N_local, cudaMemcpyHostToDevice, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        GpuTimer gt;
+        gt.start(stream);
+        launch_copy((int)d.N_local, dx, dy, stream);
+        float ms = gt.stop(stream);
+
+        util::cuda_memcpy_checked(
+            y.data(), dy, d.N_local, cudaMemcpyDeviceToHost, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        float err = max_abs_diff((int)d.N_local, y.data(), x.data());
+
+        // Effective bandwidth: read x, write y = 2 arrays
+        double bytes = 2.0 * (double)d.N_local * sizeof(float);
+        double gbs   = (bytes / 1e9) / (ms / 1e3);
+
+        if (info.rank == 0) {
+            std::cout << "[COPY] rank=" << info.rank << " N_local=" << d.N_local
+                      << " ms=" << ms << " GB/s=" << gbs << " max_err=" << err
+                      << "\n";
+        }
+
+        append_csv(
+            csv, info.rank, "copy", "copy", d.N_local, 0, 0, 0, ms, 0.0, gbs);
 
         CUDA_CHECK(cudaFree(dx));
         CUDA_CHECK(cudaFree(dy));

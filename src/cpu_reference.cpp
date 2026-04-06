@@ -8,6 +8,12 @@ void cpu_axpy(int n, float alpha, const float *x, float *y) {
     }
 }
 
+void cpu_add(int n, const float *x, const float *y, float *z) {
+    for (int i = 0; i < n; ++i) {
+        z[i] = x[i] + y[i];
+    }
+}
+
 float cpu_reduce_sum(int n, const float *x) {
     // Use double accumulator to reduce rounding for the reference
     double s = 0.0;

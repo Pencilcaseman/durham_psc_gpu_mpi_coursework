@@ -8,7 +8,11 @@ void build_counts_displs_rows(
     std::vector<int> &displs) {
     counts.resize(size);
     displs.resize(size);
-    int base = M / size, rem = M % size, offset = 0;
+
+    int base = M / size;
+    int rem = M % size;
+    int offset = 0;
+
     for (int r = 0; r < size; ++r) {
         int rows  = base + (r < rem ? 1 : 0);
         counts[r] = rows * cols;

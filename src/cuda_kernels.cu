@@ -10,6 +10,7 @@
 __global__ void
 k_axpy(int n, float alpha, const float *__restrict__ x, float *__restrict__ y) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
+
     if (i < n) {
         y[i] = alpha * x[i] + y[i];
     }
@@ -21,7 +22,10 @@ void launch_axpy(
     const float *x,
     float *y,
     cudaStream_t stream) {
-    int block = 256, grid = (n + block - 1) / block;
+
+    int block = 256;
+    int grid = (n + block - 1) / block;
+
     k_axpy<<<grid, block, 0, stream>>>(n, alpha, x, y);
     CUDA_CHECK_LAST("k_axpy");
 }
