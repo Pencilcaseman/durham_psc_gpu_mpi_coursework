@@ -87,16 +87,16 @@ __inline__ __device__ float warp_reduce_sum(float sum) {
     return sum;
 }
 
-__global__ void reduce_sum_inner(const float *__restrict__ x, size_t n, float *__restrict__ scratch) {
+__global__ void reduce_sum_inner(const float *__restrict__ x, int n, float *__restrict__ scratch) {
     // Requires blockDim.x <= 1024 -- see below
 
     float sum = 0;
 
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
 
     // Leaves us with blockDim.x sums
-    for (size_t i = idx; i < n; i += stride) {
+    for (int i = idx; i < n; i += stride) {
         sum += __ldg(&x[i]);
     }
 
@@ -104,8 +104,8 @@ __global__ void reduce_sum_inner(const float *__restrict__ x, size_t n, float *_
     // blockDim.x == 1024 => 32 elements
     __shared__ float shared_sums[32];
 
-    size_t warp_idx = threadIdx.x / warpSize;
-    size_t lane_idx = threadIdx.x % warpSize;
+    int warp_idx = threadIdx.x / warpSize;
+    int lane_idx = threadIdx.x % warpSize;
 
     // Reduces blockDim.x sums into blockDim.x / warpSize sums.
     // lane 0 in each warp holds the sum
@@ -138,12 +138,12 @@ __global__ void reduce_sum_inner(const float *__restrict__ x, size_t n, float *_
 // guarantee correct results.
 float gpu_reduce_sum(
         const float *__restrict__ device_x,
-        size_t n,
+        int n,
         float *__restrict__ scratch,
         cudaStream_t stream
     ) {
-    const size_t block_dim = 1024;
-    const size_t grid_dim  = std::min((n + block_dim - 1) / block_dim, size_t {1024});
+    const int block_dim = 1024;
+    const int grid_dim  = std::min((n + block_dim - 1) / block_dim, int {1024});
 
     reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n, scratch);
     CUDA_CHECK_LAST("reduce_sum_inner");
