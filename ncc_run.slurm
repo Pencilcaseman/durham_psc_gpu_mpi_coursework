@@ -23,28 +23,28 @@ popd
 echo "========================================================================="
 echo "AXPY"
 echo "========================================================================="
-srun -n $NUM_RANKS slurm_build/mpi_cuda_coursework \
+mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
     --mode axpy --N 50000000 --alpha 3.1415926 \
     --csv results.csv
 
 echo "========================================================================="
 echo "ADD"
 echo "========================================================================="
-srun -n $NUM_RANKS slurm_build/mpi_cuda_coursework \
+mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
     --mode add --N 50000000 \
     --csv results.csv
 
 echo "========================================================================="
 echo "COPY"
 echo "========================================================================="
-srun -n $NUM_RANKS slurm_build/mpi_cuda_coursework \
+mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
     --mode copy --N 50000000 \
     --csv results.csv
 
 echo "========================================================================="
 echo "REDUCE"
 echo "========================================================================="
-srun -n $NUM_RANKS slurm_build/mpi_cuda_coursework \
+mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
     --mode reduce --N 50000000 \
     --csv results.csv
 

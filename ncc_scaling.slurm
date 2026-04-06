@@ -20,7 +20,7 @@ cd ..
 # Strong scaling: fix global problem size, vary number of MPI ranks
 for NP in 1 2 4; do
     echo "=== NP=$NP ==="
-    srun -n $NP build/mpi_cuda_coursework \
+    mpiexec -np $NP build/mpi_cuda_coursework \
         --mode gemm --M 4096 --N 4096 --K 4096 \
         --kernel tiled --csv results_np${NP}.csv
 done
