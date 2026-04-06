@@ -1,5 +1,6 @@
-#include "kernels.hpp"
-#include "check_cuda.hpp"
+#include <coursework/kernels.hpp>
+#include <coursework/check_cuda.hpp>
+
 #include <cuda_runtime.h>
 
 // ═══════════════════════════════════════════════════════════════════════════════

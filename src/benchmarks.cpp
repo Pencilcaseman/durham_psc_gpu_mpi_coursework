@@ -1,4 +1,5 @@
-#include "benchmarks.hpp"
+#include <coursework/benchmarks.hpp>
+
 #include <cstdio>
 
 void append_csv(

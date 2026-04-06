@@ -1,4 +1,5 @@
-#include "cpu_reference.hpp"
+#include <coursework/cpu_reference.hpp>
+
 #include <cmath>
 #include <numeric>
 
