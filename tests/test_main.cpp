@@ -2,16 +2,17 @@
  * COMP3741 – Coursework: self-contained correctness tests
  * Run with:  mpirun -np <P> ./mpi_cuda_tests
  */
+
+#include <coursework/mpi_utils.hpp>
+#include <coursework/check_cuda.hpp>
+#include <coursework/kernels.hpp>
+#include <coursework/cpu_reference.hpp>
+
 #include <iostream>
 #include <vector>
 #include <cmath>
 #include <mpi.h>
 #include <cuda_runtime.h>
-
-#include "mpi_utils.hpp"
-#include "check_cuda.hpp"
-#include "kernels.hpp"
-#include "cpu_reference.hpp"
 
 static int g_pass = 0, g_fail = 0;
 
