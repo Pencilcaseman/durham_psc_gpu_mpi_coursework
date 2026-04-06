@@ -348,7 +348,7 @@ int main(int argc, char **argv) {
         auto d      = dist_1d(N, info.rank, info.size);
 
         // Scratch for reduction
-        std::vector<float> scratch(1024);
+        float *scratch = util::cuda_malloc_checked<float>(1024);
 
         std::vector<float> x(d.N_local);
         fill_random(x, 3000 + info.rank);
@@ -369,7 +369,7 @@ int main(int argc, char **argv) {
 
         GpuTimer gt;
         gt.start(stream);
-        float local_gpu = gpu_reduce_sum2(dx, (int)d.N_local, scratch, stream);
+        float local_gpu = gpu_reduce_sum(dx, (int)d.N_local, scratch, stream);
         float ms        = gt.stop(stream);
 
         // Combine partial sums from all ranks
