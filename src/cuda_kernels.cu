@@ -209,6 +209,8 @@ float gpu_reduce_sum(
         stream
     ));
 
+    float res = 0;
+
     if (n > 4) {
         reduce_sum_inner_float4<<<grid_dim, block_dim, 0, stream>>>(
             reinterpret_cast<const float4*>(device_x),
@@ -221,7 +223,6 @@ float gpu_reduce_sum(
         reduce_sum_inner<<<1, block_dim, 0, stream>>>(scratch, grid_dim, scratch);
         CUDA_CHECK_LAST("reduce_sum_inner");
 
-        float res = 0;
         util::cuda_memcpy_checked(&res, scratch, 1, cudaMemcpyDeviceToHost, stream);
     }
 
