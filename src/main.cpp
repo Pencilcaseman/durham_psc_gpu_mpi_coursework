@@ -484,7 +484,7 @@ int main(int argc, char **argv) {
 
         // ── Timed kernel
         // ────────────────────────────────────────────────────── Measure MPI
-        // barrier (communication/synchronisation) cost separately
+        // barrier (communication/synchronization) cost separately
         CpuTimer comm_timer;
         comm_timer.start();
         MPI_Barrier(MPI_COMM_WORLD);
@@ -494,6 +494,8 @@ int main(int argc, char **argv) {
         gt.start(stream);
         if (kernel == "naive") {
             launch_gemm_naive(d.M_local, Nmat, K, dA, dB, dC, stream);
+        } else if (kernel == "optimised") {
+            launch_gemm_optimised(d.M_local, Nmat, K, dA, dB, dC, stream);
         } else {
             launch_gemm_tiled16(d.M_local, Nmat, K, dA, dB, dC, stream);
         }

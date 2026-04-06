@@ -51,3 +51,12 @@ void launch_gemm_tiled16(
     const float *B,
     float *C,
     cudaStream_t stream = 0);
+
+void launch_gemm_optimised(
+    int M,
+    int N,
+    int K,
+    const float *A,
+    const float *B,
+    float *C,
+    cudaStream_t stream = 0);

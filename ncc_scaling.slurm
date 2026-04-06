@@ -18,9 +18,11 @@ cmake --build . -j
 cd ..
 
 # Strong scaling: fix global problem size, vary number of MPI ranks
-for NP in 1 2 4; do
-    echo "=== NP=$NP ==="
-    mpiexec -np $NP build/mpi_cuda_coursework \
-        --mode gemm --M 4096 --N 4096 --K 4096 \
-        --kernel tiled --csv results_np${NP}.csv
+for KERNEL in naive tiled optimised; do
+    for NP in 1 2 4; do
+        echo "=== kernel=$KERNEL NP=$NP ==="
+        mpiexec -np $NP build/mpi_cuda_coursework \
+            --mode gemm --M 4096 --N 4096 --K 4096 \
+            --kernel $KERNEL --csv results_${KERNEL}_np${NP}.csv
+    done
 done

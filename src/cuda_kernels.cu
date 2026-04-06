@@ -4,6 +4,9 @@
 
 #include <cmath>
 #include <cuda_runtime.h>
+#include <mma.h>
+
+using namespace nvcuda;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Part A1 – Vector operations
@@ -333,4 +336,31 @@ void launch_gemm_tiled16(
     dim3 grid((N + T - 1) / T, (M + T - 1) / T);
     k_gemm_tiled<T><<<grid, block, 0, stream>>>(M, N, K, A, B, C);
     CUDA_CHECK_LAST("k_gemm_tiled<32>");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Part B2 – Optimised GEMM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+__global__ void k_gemm_optimised(
+    int M,
+    int N,
+    int K,
+    const float *__restrict__ A,
+    const float *__restrict__ B,
+    float *__restrict__ C) {
+    // TODO: implement optimised GEMM kernel
+}
+
+void launch_gemm_optimised(
+    int M,
+    int N,
+    int K,
+    const float *A,
+    const float *B,
+    float *C,
+    cudaStream_t stream) {
+    // TODO: choose block/grid dims and launch k_gemm_optimised
+    k_gemm_optimised<<<1, 1, 0, stream>>>(M, N, K, A, B, C);
+    CUDA_CHECK_LAST("k_gemm_optimised");
 }

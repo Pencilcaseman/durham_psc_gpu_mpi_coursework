@@ -61,3 +61,10 @@ echo "========================================================================="
 mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
     --mode gemm --M 4096 --N 4096 --K 4096 \
     --kernel tiled --csv results.csv
+
+echo "========================================================================="
+echo "GEMM (optimised)"
+echo "========================================================================="
+mpiexec -np $NUM_RANKS slurm_build/mpi_cuda_coursework \
+    --mode gemm --M 4096 --N 4096 --K 4096 \
+    --kernel optimised --csv results.csv
