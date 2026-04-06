@@ -148,7 +148,7 @@ __inline__ __device__ float warp_reduce_sum(float sum) {
     return sum;
 }
 
-__global__ void reduce_sum_inner(float *__restrict__ x, size_t n, float *__restrict__ out) {
+__global__ void reduce_sum_inner(float *__restrict__ x, size_t n, float *__restrict__ scratch) {
     // Requires blockDim.x <= 1024 -- see below
 
     float sum = 0;
@@ -178,18 +178,6 @@ __global__ void reduce_sum_inner(float *__restrict__ x, size_t n, float *__restr
 
     __syncthreads();
 
-    // // Currently have e.g. 32 numbers to sum.
-    // // Only first warp in a block needs to do this
-    //
-    // if (warp_idx == 0) {
-    //     sum = lane_idx < blockDim.x / warpSize ? shared_sums[lane_idx] : 0.0f;
-    //     sum = warp_reduce_sum(sum);
-    //
-    //     if (lane_idx == 0) {
-    //         x[blockIdx.x] = sum;
-    //     }
-    // }
-
     // Currently have e.g. 32 numbers to sum.
     // Only first warp in a block needs to do this
 
@@ -198,27 +186,28 @@ __global__ void reduce_sum_inner(float *__restrict__ x, size_t n, float *__restr
         sum = warp_reduce_sum(sum);
 
         if (lane_idx == 0) {
-            atomicAdd(out, sum);
+            scratch[blockIdx.x] = sum;
         }
     }
+
+    // scratch[0..gridDim.x - 1] now contains partial sums of each block.
 }
 
 float gpu_reduce_sum2(float *device_x, size_t n, cudaStream_t stream) {
     const size_t block_dim = 1024;
     const size_t grid_dim  = std::min((n + block_dim - 1) / block_dim, size_t {1024});
 
-    float *out = util::cuda_malloc_checked<float>(1);
-    cudaMemsetAsync(out, 0, sizeof(float), stream);
+    float *scratch = util::cuda_malloc_checked<float>(grid_dim);
 
-    reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n, out);
+    reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n, scratch);
     CUDA_CHECK_LAST("reduce_sum_inner");
 
-    // reduce_sum_inner<<<1, block_dim, 0, stream>>>(device_x, grid_dim);
-    // CUDA_CHECK_LAST("reduce_sum_inner");
+    reduce_sum_inner<<<1, block_dim, 0, stream>>>(scratch, grid_dim, scratch);
+    CUDA_CHECK_LAST("reduce_sum_inner");
 
     float res = 0;
-    // util::cuda_memcpy_checked(&res, device_x, 1, cudaMemcpyDeviceToHost, stream);
-    util::cuda_memcpy_checked(&res, out, 1, cudaMemcpyDeviceToHost, stream);
+    util::cuda_memcpy_checked(&res, scratch, 1, cudaMemcpyDeviceToHost, stream);
+    cudaFree(scratch);
 
     return res;
 }
