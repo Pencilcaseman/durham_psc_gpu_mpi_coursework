@@ -1,4 +1,4 @@
-#include <mpi_distribution.hpp>
+#include <coursework/mpi_distribution.hpp>
 
 void build_counts_displs_rows(
     int M,
