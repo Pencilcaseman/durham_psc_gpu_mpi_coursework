@@ -195,7 +195,7 @@ __global__ void reduce_sum_inner(float *__restrict__ x, size_t n) {
 
 float gpu_reduce_sum2(float *device_x, size_t n, cudaStream_t stream) {
     const size_t block_dim = 1024;
-    const size_t grid_dim  = std::min((n + block_dim - 1) / block_dim, 1024ULL);
+    const size_t grid_dim  = std::min((n + block_dim - 1) / block_dim, size_t {1024});
 
     reduce_sum_inner<<<grid_dim, block_dim, 0, stream>>>(device_x, n);
     CUDA_CHECK_LAST("reduce_sum_inner");
@@ -204,7 +204,7 @@ float gpu_reduce_sum2(float *device_x, size_t n, cudaStream_t stream) {
     CUDA_CHECK_LAST("reduce_sum_inner");
 
     float res = 0;
-    util::cuda_memcpy_checked(&res, device_x, 1, cudaMemcpyDeviceToHost);
+    util::cuda_memcpy_checked(&res, device_x, 1, cudaMemcpyDeviceToHost, stream);
     return res;
 }
 
