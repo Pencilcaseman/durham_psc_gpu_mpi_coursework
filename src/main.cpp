@@ -394,14 +394,19 @@ int main(int argc, char **argv) {
         float tol = 1e-3f * std::sqrt((float)N);
         float err = std::fabs(global_gpu - global_ref);
 
+        // Effective bandwidth: read N_local floats (1 array, read only)
+        double bytes = (double)d.N_local * sizeof(float);
+        double gbs   = (bytes / 1e9) / (ms / 1e3);
+
         if (info.rank == 0) {
             std::cout << "[REDUCE] N=" << N << " gpu=" << global_gpu
                       << " ref=" << global_ref << " err=" << err
                       << " tol=" << tol << " ms=" << ms
+                      << " GB/s=" << gbs
                       << (err < tol ? "  PASS" : "  FAIL") << "\n";
         }
 
-        append_csv(csv, info.rank, "reduce", "tree", N, 0, 0, 0, ms, 0.0, 0.0);
+        append_csv(csv, info.rank, "reduce", "tree", N, 0, 0, 0, ms, 0.0, gbs);
 
         CUDA_CHECK(cudaFree(dx));
     }
