@@ -356,7 +356,7 @@ int main(int argc, char **argv) {
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         // Warm-up (not timed)
-        gpu_reduce_sum(dx, (int)d.N_local, stream);
+        gpu_reduce_sum2(dx, (int)d.N_local, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         // Re-upload data since reduce allocates/frees temp buffers
@@ -366,7 +366,7 @@ int main(int argc, char **argv) {
 
         GpuTimer gt;
         gt.start(stream);
-        float local_gpu = gpu_reduce_sum(dx, (int)d.N_local, stream);
+        float local_gpu = gpu_reduce_sum2(dx, (int)d.N_local, stream);
         float ms        = gt.stop(stream);
 
         // Combine partial sums from all ranks
