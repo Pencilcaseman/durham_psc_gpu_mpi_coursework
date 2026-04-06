@@ -24,6 +24,9 @@ run CONFIG FLAGS="": (build CONFIG FLAGS)
     ./build/{{ uppercamelcase(CONFIG) }}/mpi_cuda_coursework
 
 clean:
-    rm -rf build
+    rm -rf build slurm_build
     rm -rf .cache
     rm -f compile_commands.json
+
+distclean: clean
+    rm -rf slurm_output/*
