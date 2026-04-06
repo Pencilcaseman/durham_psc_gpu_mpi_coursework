@@ -158,7 +158,7 @@ __global__ void reduce_sum_inner(float *__restrict__ x, size_t n) {
 
     // Leaves us with blockDim.x sums
     for (size_t i = idx; i < n; i += stride) {
-        sum += x[i];
+        sum += __ldg(&x[i]);
     }
 
     // Must be ceil(blockDim.x / warpSize) elements long
