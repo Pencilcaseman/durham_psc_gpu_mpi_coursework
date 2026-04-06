@@ -9,12 +9,14 @@ void launch_axpy(
     const float *x,
     float *y,
     cudaStream_t stream = 0);
+
 void launch_add(
     int n,
     const float *x,
     const float *y,
     float *z,
     cudaStream_t stream = 0); // z = x + y
+                              //
 void launch_copy(
     int n,
     const float *x,
@@ -24,6 +26,7 @@ void launch_copy(
 // ── Part A2: parallel reduction
 // ───────────────────────────────────────────────
 float gpu_reduce_sum(const float *d_x, int n, cudaStream_t stream = 0);
+float gpu_reduce_sum2(const float *d_x, int n, cudaStream_t stream = 0);
 
 // ── Part B: GEMM
 // ──────────────────────────────────────────────────────────────
@@ -35,6 +38,7 @@ void launch_gemm_naive(
     const float *B,
     float *C,
     cudaStream_t stream = 0);
+
 void launch_gemm_tiled16(
     int M,
     int N,
