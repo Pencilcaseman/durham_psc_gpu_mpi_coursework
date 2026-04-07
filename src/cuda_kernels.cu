@@ -520,7 +520,7 @@ void launch_gemm_optimised(
     constexpr int PAD    = 8;
     // 4x4 warp grid, each warp covers 32x32 (2x2 coarsened WMMA tiles)
     constexpr int NUM_WARPS = (TILE_M / 32) * (TILE_N / 32); // 16
-    const int threads   = NUM_WARPS * warpSize;           // 512
+    constexpr int threads   = NUM_WARPS * 32;           // 512
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
