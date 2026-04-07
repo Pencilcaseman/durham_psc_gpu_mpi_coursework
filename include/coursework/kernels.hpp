@@ -1,5 +1,6 @@
 #pragma once
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 // ── Part A1: vector operations
 // ────────────────────────────────────────────────
@@ -52,6 +53,22 @@ void launch_gemm_tiled16(
     float *C,
     cudaStream_t stream = 0);
 
+class GemmScratch {
+public:
+    __half *a_half = nullptr;
+    __half *b_half = nullptr;
+    int m = 0;
+    int n = 0;
+    int k = 0;
+
+    GemmScratch() = default;
+    GemmScratch(int M, int N, int K);
+    ~GemmScratch();
+
+    GemmScratch(const GemmScratch &) = delete;
+    GemmScratch &operator=(const GemmScratch &) = delete;
+};
+
 void launch_gemm_optimised(
     int M,
     int N,
@@ -59,4 +76,5 @@ void launch_gemm_optimised(
     const float *A,
     const float *B,
     float *C,
+    GemmScratch &scratch,
     cudaStream_t stream = 0);

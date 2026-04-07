@@ -458,6 +458,7 @@ int main(int argc, char **argv) {
         MPI_Bcast(B.data(), (int)B.size(), MPI_FLOAT, 0, MPI_COMM_WORLD);
 
         // Allocate GPU memory
+        GemmScratch gemm_scratch(d.M_local, Nmat, K);
         float *dA = nullptr, *dB = nullptr, *dC = nullptr;
         CUDA_CHECK(cudaMalloc(&dA, A_local.size() * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&dB, B.size() * sizeof(float)));
@@ -495,7 +496,7 @@ int main(int argc, char **argv) {
         if (kernel == "naive") {
             launch_gemm_naive(d.M_local, Nmat, K, dA, dB, dC, stream);
         } else if (kernel == "optimised") {
-            launch_gemm_optimised(d.M_local, Nmat, K, dA, dB, dC, stream);
+            launch_gemm_optimised(d.M_local, Nmat, K, dA, dB, dC, gemm_scratch, stream);
         } else {
             launch_gemm_tiled16(d.M_local, Nmat, K, dA, dB, dC, stream);
         }

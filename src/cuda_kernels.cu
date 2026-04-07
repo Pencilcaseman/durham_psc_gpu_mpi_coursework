@@ -2,6 +2,7 @@
 #include <coursework/check_cuda.hpp>
 #include <coursework/util.hpp>
 
+#include <cassert>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
@@ -346,7 +347,7 @@ void launch_convert_f32_to_f16(const float *in, __half *out, int count,
 // must equal 0 % 8. This could probably be improved by writing inline PTX, but
 // that is a lot of work :/
 template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
-__global__ void __launch_bounds__(1024, 1)
+__global__ void __launch_bounds__(512, 1)
 gemm_optimised_kernel(int m, int n, int k,
                       const __half *__restrict__ mat_a,
                       const __half *__restrict__ mat_b,
@@ -356,12 +357,8 @@ gemm_optimised_kernel(int m, int n, int k,
     constexpr int LD_B = TILE_N + PAD;
     constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2);
 
-    extern __shared__ char smem_raw[];
-    __half (*tile_a)[TILE_M][LD_A] =
-        reinterpret_cast<__half (*)[TILE_M][LD_A]>(smem_raw);
-    __half (*tile_b)[TILE_K][LD_B] =
-        reinterpret_cast<__half (*)[TILE_K][LD_B]>(
-            smem_raw + sizeof(__half) * 2 * TILE_M * LD_A);
+    __shared__ __half tile_a[2][TILE_M][LD_A];
+    __shared__ __half tile_b[2][TILE_K][LD_B];
 
     const int tid = threadIdx.x;
     const int block_row = blockIdx.y * TILE_M;
@@ -549,41 +546,32 @@ gemm_optimised_kernel(int m, int n, int k,
     }
 }
 
+GemmScratch::GemmScratch(int M, int N, int K) : m(M), n(N), k(K) {
+    CUDA_CHECK(cudaMalloc(&a_half, (size_t)M * K * sizeof(__half)));
+    CUDA_CHECK(cudaMalloc(&b_half, (size_t)K * N * sizeof(__half)));
+}
+
+GemmScratch::~GemmScratch() {
+    if (a_half) cudaFree(a_half);
+    if (b_half) cudaFree(b_half);
+}
+
 void launch_gemm_optimised(int M, int N, int K,
                            const float *A, const float *B, float *C,
+                           GemmScratch &scratch,
                            cudaStream_t stream) {
-    __half *a_half, *b_half;
+    assert(M <= scratch.m && N <= scratch.n && K <= scratch.k
+           && "GemmScratch too small for requested dimensions");
 
-    cudaMalloc(&a_half, M * K * sizeof(__half));
-    cudaMalloc(&b_half, K * N * sizeof(__half));
+    launch_convert_f32_to_f16(A, scratch.a_half, M * K, stream);
+    launch_convert_f32_to_f16(B, scratch.b_half, K * N, stream);
 
-    launch_convert_f32_to_f16(A, a_half, M * K, stream);
-    launch_convert_f32_to_f16(B, b_half, K * N, stream);
-
-    constexpr int TILE_M = 256, TILE_N = 128, TILE_K = 32, PAD = 8;
+    constexpr int TILE_M = 128, TILE_N = 128, TILE_K = 32, PAD = 8;
     constexpr int THREADS = ((TILE_M / 32) * (TILE_N / 32)) * 32;
-    constexpr int LD_A = TILE_K + PAD;
-    constexpr int LD_B = TILE_N + PAD;
-    constexpr size_t SMEM_BYTES =
-        sizeof(__half) * (2 * TILE_M * LD_A + 2 * TILE_K * LD_B);
-
-    cudaFuncSetAttribute(
-        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
-        cudaFuncAttributePreferredSharedMemoryCarveout,
-        cudaSharedmemCarveoutMaxShared);
-
-    cudaFuncSetAttribute(
-        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        SMEM_BYTES);
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
-        <<<grid, THREADS, SMEM_BYTES, stream>>>(M, N, K, a_half, b_half, C);
+        <<<grid, THREADS, 0, stream>>>(M, N, K, scratch.a_half, scratch.b_half, C);
     CUDA_CHECK_LAST("gemm_optimised_kernel");
-
-    cudaStreamSynchronize(stream);
-    cudaFree(a_half);
-    cudaFree(b_half);
 }
 
