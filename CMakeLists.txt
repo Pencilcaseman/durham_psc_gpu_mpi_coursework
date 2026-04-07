@@ -46,7 +46,7 @@ set_target_properties(
     PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_ARCHITECTURES
-            "61;70;75;80" # 61=Titan Xp, 70=V100, 75=Turing, 80=A100
+            "70;75;80" # 70=V100, 75=Turing, 80=A100
 )
 
 target_compile_options(
