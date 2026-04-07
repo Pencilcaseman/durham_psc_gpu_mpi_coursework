@@ -453,7 +453,7 @@ void launch_gemm_optimised(
     constexpr int TILE_M = 64;
     constexpr int TILE_N = 128;
     constexpr int TILE_K = 64;
-    constexpr int THREADS = (TILE_M / WMMA_SIZE) * (TILE_N / WMMA_SIZE) * warpSize;
+    constexpr int THREADS = (TILE_M / WMMA_SIZE) * (TILE_N / WMMA_SIZE) * 32;
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K><<<grid, THREADS, 0, stream>>>(M, N, K, A, B, C);
