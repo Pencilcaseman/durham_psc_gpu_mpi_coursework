@@ -343,71 +343,7 @@ void launch_gemm_tiled16(
 // Part B2 – Optimised GEMM
 // ═══════════════════════════════════════════════════════════════════════════════
 
-constexpr static WMMA_SIZE = 16;
-
-// Call with a single warp -- 32 threads
-__device__ void gemm_microkernel_16x16x16(
-    int m,
-    int n,
-    int k,
-    int c_row, // Row of tile in C assuming WMMA_SIZE tiles
-    int c_col, // Column of tile in C assuming WMMA_SIZE tiles
-    const float *__restrict__ mat_a,
-    const float *__restrict__ mat_b,
-    float *__restrict__ mat_c
-) {
-    // 32 threads
-    // 16 * 16 = 256 elements
-    // Each thread handles 8 elements
-
-    __shared__ __half a_tile[WMMA_SIZE][WMMA_SIZE];
-    __shared__ __half b_tile[WMMA_SIZE][WMMA_SIZE];
-
-    __shared__ float c_tile[WMMA_SIZE][WMMA_SIZE];
-
-    int tid = threadIdx.x;
-
-    wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, half, wmma::row_major> a_frag;
-    wmma::fragment<wmma::matrix_b, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, half, wmma::row_major> b_frag;
-    wmma::fragment<wmma::accumulator, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, float> acc_frag;
-
-    wmma::fill_fragment(acc_frag, 0.0f);
-
-    for (int inner = 0; inner < k / WMMA_SIZE; inner++) {
-        // Copy and cast into tiles
-        for (int i = tid; i < WMMA_SIZE * WMMA_SIZE; i += warpSize) {
-            int row = i / WMMA_SIZE;
-            int col = i % WMMA_SIZE;
-
-            a_tile[row][col] = __float2half(
-                mat_a[
-                    (c_row * WMMA_SIZE + row) * k
-                    + (inner * WMMA_SIZE + col)
-                ]
-            );
-
-            b_tile[row][col] = __float2half(
-                mat_a[
-                    (inner * WMMA_SIZE + row) * n
-                    + (c_col * WMMA_SIZE + col)
-                ]
-            );
-        }
-
-        __syncwarp();
-
-        // Load fragments
-        wmma::load_matrix_sync(a_frag, a_tile, WMMA_SIZE);
-        wmma::load_matrix_sync(b_frag, b_tile, WMMA_SIZE);
-
-        // Perform matmul
-        wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
-    }
-
-    // Write to C
-    int offset = (c_row * WMMA_SIZE) + (c_col * WMMA_SIZE);
-    wmma::store_matrix_sync(mat_c + offset, acc_frag, n, wmma::mem_row_major);
-}
+constexpr static int WMMA_SIZE = 16;
 
 template<int TILE_M = 64, int TILE_N = 64, int TILE_K = 64>
 __global__ void gemm_optimised_kernel(
