@@ -38,6 +38,7 @@ void launch_axpy(
 }
 
 // --- ADD: z = x + y ----------------------------------------------------------
+// TODO (students): implement this kernel for Part A1
 __global__ void k_add(
     int n,
     const float *__restrict__ x,
@@ -61,6 +62,7 @@ void launch_add(
 }
 
 // --- COPY: y = x -------------------------------------------------------------
+// TODO (students): implement this kernel for Part A1
 __global__ void
 k_copy(int n, const float *__restrict__ x, float *__restrict__ y) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -90,20 +92,27 @@ __inline__ __device__ float warp_reduce_sum(float sum) {
 }
 
 __global__ void reduce_sum_inner(const float *__restrict__ x, int n, float *__restrict__ scratch) {
+    // Requires blockDim.x <= 1024 -- see below
+
     float sum = 0;
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
+    // Leaves us with blockDim.x sums
     for (int i = idx; i < n; i += stride) {
         sum += __ldg(&x[i]);
     }
 
+    // Must be ceil(blockDim.x / warpSize) elements long
+    // blockDim.x == 1024 => 32 elements
     __shared__ float shared_sums[32];
 
     int warp_idx = threadIdx.x / warpSize;
     int lane_idx = threadIdx.x % warpSize;
 
+    // Reduces blockDim.x sums into blockDim.x / warpSize sums.
+    // lane 0 in each warp holds the sum
     sum = warp_reduce_sum(sum);
 
     if (lane_idx == 0) {
@@ -111,6 +120,9 @@ __global__ void reduce_sum_inner(const float *__restrict__ x, int n, float *__re
     }
 
     __syncthreads();
+
+    // Currently have e.g. 32 numbers to sum.
+    // Only first warp in a block needs to do this
 
     if (warp_idx == 0) {
         sum = lane_idx < blockDim.x / warpSize ? shared_sums[lane_idx] : 0.0f;
@@ -120,15 +132,20 @@ __global__ void reduce_sum_inner(const float *__restrict__ x, int n, float *__re
             scratch[blockIdx.x] = sum;
         }
     }
+
+    // scratch[0..gridDim.x - 1] now contains partial sums of each block.
 }
 
 template<int UNROLL = 4>
 __global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, float *__restrict__ scratch) {
+    // Requires blockDim.x <= 1024 -- see below
+
     float sum = 0;
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
+    // Unrolled grid-stride loop: each iteration loads UNROLL float4s
     int i = idx;
     for (; i + stride * (UNROLL - 1) < n; i += stride * UNROLL) {
 #pragma unroll
@@ -138,16 +155,21 @@ __global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, flo
         }
     }
 
+    // Tail
     for (; i < n; i += stride) {
         float4 tmp = __ldg(&x[i]);
         sum += tmp.x + tmp.y + tmp.z + tmp.w;
     }
 
+    // Must be ceil(blockDim.x / warpSize) elements long
+    // blockDim.x == 1024 => 32 elements
     __shared__ float shared_sums[32];
 
     int warp_idx = threadIdx.x / warpSize;
     int lane_idx = threadIdx.x % warpSize;
 
+    // Reduces blockDim.x sums into blockDim.x / warpSize sums.
+    // lane 0 in each warp holds the sum
     sum = warp_reduce_sum(sum);
 
     if (lane_idx == 0) {
@@ -155,6 +177,9 @@ __global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, flo
     }
 
     __syncthreads();
+
+    // Currently have e.g. 32 numbers to sum.
+    // Only first warp in a block needs to do this
 
     if (warp_idx == 0) {
         sum = lane_idx < blockDim.x / warpSize ? shared_sums[lane_idx] : 0.0f;
@@ -164,8 +189,14 @@ __global__ void reduce_sum_inner_float4(const float4 *__restrict__ x, int n, flo
             scratch[blockIdx.x] = sum;
         }
     }
+
+    // scratch[0..gridDim.x - 1] now contains partial sums of each block.
 }
 
+// The scratch buffer must be 1024 elements long and will be modified during the
+// execution of this function. If multiple instances of this function are called
+// in parallel, each must use a separate, non-overlapping scratch buffer to
+// guarantee correct results.
 float gpu_reduce_sum(
         const float *__restrict__ device_x,
         int n,
@@ -255,6 +286,8 @@ void launch_gemm_naive(
 // Part B2 – Tiled GEMM with shared memory
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// TODO (students): tune TILE size (try 16 and 32), experiment with
+//                  #pragma unroll and __ldg() for extra performance
 template<int TILE>
 __global__ void k_gemm_tiled(
     int M,
@@ -307,16 +340,16 @@ void launch_gemm_tiled16(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Part B2 – Optimised GEMM (Tensor Core WMMA, double-buffered)
+// Part B2 – Optimised GEMM
 // ═══════════════════════════════════════════════════════════════════════════════
 
 constexpr static int WMMA_SIZE = 16;
 
-// Each block covers TILE_M x TILE_N output elements.
-// 16 warps in a 4x4 grid, each computing 2x2 WMMA tiles = 32x32 output.
-// Double buffering: global loads for the next K-tile are issued BEFORE
-// computing on the current tile, hiding load latency under Tensor Core work.
-// FP32->FP16 conversion uses __half2 packing for 2x throughput.
+// Optimised GEMM using WMMA Tensor Cores with:
+//   - Thread coarsening: each warp computes a 2x2 grid of 16x16 WMMA tiles (32x32)
+//   - Double buffering: overlaps global memory loads with Tensor Core computation
+//   - Vectorised loads: float4 (128-bit) coalesced global memory access
+//   - Shared memory padding: eliminates bank conflicts for WMMA loads
 template<int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
 __global__ void gemm_optimised_kernel(
     int m,
@@ -325,13 +358,15 @@ __global__ void gemm_optimised_kernel(
     const float *__restrict__ mat_a,
     const float *__restrict__ mat_b,
     float *__restrict__ mat_c) {
+    // 16 warps in a 4x4 grid, each computing 2x2 WMMA tiles = 32x32 output
+    // 16 warps * 32 threads/warp = 512 threads per block
+    // Block covers TILE_M x TILE_N = 128 x 128 output elements
 
     constexpr int LD_A = TILE_K + PAD;
     constexpr int LD_B = TILE_N + PAD;
+    constexpr int WARPS_M = TILE_M / (WMMA_SIZE * 2); // 4
     constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2); // 4
 
-    // Two shared memory buffers for double buffering, stored as __half2
-    // for packed writes. WMMA loads will reinterpret as __half via pointer cast.
     __shared__ __half tile_a[2][TILE_M][LD_A];
     __shared__ __half tile_b[2][TILE_K][LD_B];
 
@@ -340,61 +375,67 @@ __global__ void gemm_optimised_kernel(
     const int block_col = blockIdx.x * TILE_N;
 
     const int warp_id  = tid / warpSize;
-    const int warp_row = warp_id / WARPS_N;
-    const int warp_col = warp_id % WARPS_N;
+    const int warp_row = warp_id / WARPS_N; // 0..3
+    const int warp_col = warp_id % WARPS_N; // 0..3
 
-    // Accumulator fragments: 2x2 grid of 16x16 per warp
-    wmma::fragment<wmma::accumulator, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, float> frag_acc[2][2];
+    // Each warp accumulates a 2x2 grid of 16x16 fragments
+    wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
+                   __half, wmma::row_major> frag_a[2];
+    wmma::fragment<wmma::matrix_b, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
+                   __half, wmma::row_major> frag_b[2];
+    wmma::fragment<wmma::accumulator, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
+                   float> frag_acc[2][2];
+
     #pragma unroll
     for (int i = 0; i < 2; ++i)
         for (int j = 0; j < 2; ++j)
             wmma::fill_fragment(frag_acc[i][j], 0.0f);
 
-    constexpr int FLOAT4S_A = (TILE_M * TILE_K) / 4; // 1024
-    constexpr int FLOAT4S_B = (TILE_K * TILE_N) / 4; // 1024
+    // Number of float4s to load per tile
+    constexpr int FLOAT4S_A = (TILE_M * TILE_K) / 4; // 128*32/4 = 1024
+    constexpr int FLOAT4S_B = (TILE_K * TILE_N) / 4; // 32*128/4 = 1024
 
     const int num_k_tiles = (k + TILE_K - 1) / TILE_K;
 
-    // Load a K-tile of A and B into shared memory buffer `buf`.
-    // Converts FP32 -> FP16 using __half2 packing where possible.
+    // === Lambda-style cooperative load using float4 ===
+    // Loads a TILE_M x TILE_K block of A and TILE_K x TILE_N block of B
+    // into shared memory buffer `buf`, converting float32 -> half
     auto load_tile = [&](int buf, int k_offset) {
-        // --- Load A: TILE_M rows x TILE_K cols ---
+        // Load tile_a: 128 rows x 32 cols = 4096 floats = 1024 float4s
         for (int i = tid; i < FLOAT4S_A; i += blockDim.x) {
-            int r  = i / (TILE_K / 4);
+            int r = i / (TILE_K / 4);
             int c4 = i % (TILE_K / 4);
             int global_r = block_row + r;
             int global_c = k_offset + c4 * 4;
 
             float4 val = make_float4(0.f, 0.f, 0.f, 0.f);
             if (global_r < m && global_c + 3 < k) {
-                val = __ldg(reinterpret_cast<const float4*>(
-                    &mat_a[global_r * k + global_c]));
+                val = __ldg(reinterpret_cast<const float4*>(&mat_a[global_r * k + global_c]));
             } else if (global_r < m) {
+                // Scalar fallback for boundary
                 const float *base = &mat_a[global_r * k + global_c];
                 if (global_c     < k) val.x = __ldg(base);
                 if (global_c + 1 < k) val.y = __ldg(base + 1);
                 if (global_c + 2 < k) val.z = __ldg(base + 2);
                 if (global_c + 3 < k) val.w = __ldg(base + 3);
             }
-
             int sc = c4 * 4;
-            __half2 h01 = __floats2half2_rn(val.x, val.y);
-            __half2 h23 = __floats2half2_rn(val.z, val.w);
-            *reinterpret_cast<__half2*>(&tile_a[buf][r][sc    ]) = h01;
-            *reinterpret_cast<__half2*>(&tile_a[buf][r][sc + 2]) = h23;
+            tile_a[buf][r][sc    ] = __float2half(val.x);
+            tile_a[buf][r][sc + 1] = __float2half(val.y);
+            tile_a[buf][r][sc + 2] = __float2half(val.z);
+            tile_a[buf][r][sc + 3] = __float2half(val.w);
         }
 
-        // --- Load B: TILE_K rows x TILE_N cols ---
+        // Load tile_b: 32 rows x 128 cols = 4096 floats = 1024 float4s
         for (int i = tid; i < FLOAT4S_B; i += blockDim.x) {
-            int r  = i / (TILE_N / 4);
+            int r = i / (TILE_N / 4);
             int c4 = i % (TILE_N / 4);
             int global_r = k_offset + r;
             int global_c = block_col + c4 * 4;
 
             float4 val = make_float4(0.f, 0.f, 0.f, 0.f);
             if (global_r < k && global_c + 3 < n) {
-                val = __ldg(reinterpret_cast<const float4*>(
-                    &mat_b[global_r * n + global_c]));
+                val = __ldg(reinterpret_cast<const float4*>(&mat_b[global_r * n + global_c]));
             } else if (global_r < k) {
                 const float *base = &mat_b[global_r * n + global_c];
                 if (global_c     < n) val.x = __ldg(base);
@@ -402,22 +443,16 @@ __global__ void gemm_optimised_kernel(
                 if (global_c + 2 < n) val.z = __ldg(base + 2);
                 if (global_c + 3 < n) val.w = __ldg(base + 3);
             }
-
             int sc = c4 * 4;
-            __half2 h01 = __floats2half2_rn(val.x, val.y);
-            __half2 h23 = __floats2half2_rn(val.z, val.w);
-            *reinterpret_cast<__half2*>(&tile_b[buf][r][sc    ]) = h01;
-            *reinterpret_cast<__half2*>(&tile_b[buf][r][sc + 2]) = h23;
+            tile_b[buf][r][sc    ] = __float2half(val.x);
+            tile_b[buf][r][sc + 1] = __float2half(val.y);
+            tile_b[buf][r][sc + 2] = __float2half(val.z);
+            tile_b[buf][r][sc + 3] = __float2half(val.w);
         }
     };
 
-    // Compute WMMA on shared memory buffer `buf`
+    // Compute on a given shared memory buffer
     auto compute_tile = [&](int buf) {
-        wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
-                       __half, wmma::row_major> frag_a[2];
-        wmma::fragment<wmma::matrix_b, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
-                       __half, wmma::row_major> frag_b[2];
-
         const int smem_row = warp_row * 32;
         const int smem_col = warp_col * 32;
 
@@ -436,30 +471,24 @@ __global__ void gemm_optimised_kernel(
     };
 
     // === Double-buffered main loop ===
+
     // Prologue: load first K-tile into buffer 0
     load_tile(0, 0);
     __syncthreads();
 
-    for (int t = 0; t < num_k_tiles - 1; ++t) {
+    for (int t = 0; t < num_k_tiles; ++t) {
         int cur = t & 1;
         int nxt = 1 - cur;
 
-        // Issue loads for the NEXT tile first — the global memory requests
-        // go in-flight while we compute on the current tile.
-        load_tile(nxt, (t + 1) * TILE_K);
+        // Load next K-tile into the other buffer (if not last)
+        if (t + 1 < num_k_tiles) {
+            load_tile(nxt, (t + 1) * TILE_K);
+        }
 
-        // Compute on the current (already-loaded) buffer.
-        // Tensor Core work overlaps with the in-flight global loads above.
+        // Compute WMMA on current buffer
         compute_tile(cur);
 
-        // Wait for the next tile's loads to land before the next iteration
-        // reads from that buffer.
         __syncthreads();
-    }
-
-    // Epilogue: compute the last tile (no next tile to load)
-    if (num_k_tiles > 0) {
-        compute_tile((num_k_tiles - 1) & 1);
     }
 
     // === Store results back to global C ===
@@ -489,8 +518,9 @@ void launch_gemm_optimised(
     constexpr int TILE_N = 128;
     constexpr int TILE_K = 32;
     constexpr int PAD    = 8;
+    // 4x4 warp grid, each warp covers 32x32 (2x2 coarsened WMMA tiles)
     constexpr int NUM_WARPS = (TILE_M / 32) * (TILE_N / 32); // 16
-    constexpr int threads   = NUM_WARPS * 32;                  // 512
+    constexpr int threads   = NUM_WARPS * 32;           // 512
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
