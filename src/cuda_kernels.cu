@@ -342,11 +342,6 @@ void launch_convert_f32_to_f16(const float *in, __half *out, int count,
     convert_f32_to_f16<<<blocks, threads, 0, stream>>>(in, out, count);
 }
 
-alignas(16) struct half8 {
-    // __half2 is the largest half-precision type CUDA provodies, for some reason
-    __half2 data[4];
-};
-
 // NOTE: wmma::load_matrix_sync requires 16-byte aligned row stride, so PAD
 // must equal 0 % 8. This could probably be improved by writing inline PTX, but
 // that is a lot of work :/
@@ -383,8 +378,12 @@ gemm_optimised_kernel(int m, int n, int k,
     const int num_k_tiles = (k + TILE_K - 1) / TILE_K;
 
     // Register prefetch buffers
-    half8 prefetch_a;
-    half8 prefetch_b;
+    // NOTE: THESE ARE NOT ACTUALLY FLOAT4s!
+    //       THESE ARE PACKED 8x__half!
+    //
+    // Using float4 becuase it works with __ldg
+    float4 prefetch_a;
+    float4 prefetch_b;
 
     // Load from global memory into prefetch buffer
     auto global_load_a = [&](int k_offset) {
@@ -395,7 +394,7 @@ gemm_optimised_kernel(int m, int n, int k,
 
         if (global_row < m && global_col + 7 < k) {
             // A bit dodgy but it works
-            prefetch_a = __ldg(reinterpret_cast<const half8 *>(
+            prefetch_a = __ldg(reinterpret_cast<const float4 *>(
                 &mat_a[global_row * k + global_col])
             );
         } else {
@@ -408,7 +407,7 @@ gemm_optimised_kernel(int m, int n, int k,
                 }
             }
 
-            prefetch_a = *reinterpret_cast<const half8 *>(tmp);
+            prefetch_a = *reinterpret_cast<const float4 *>(tmp);
         }
     };
 
@@ -419,7 +418,7 @@ gemm_optimised_kernel(int m, int n, int k,
         int global_col = block_col + col_chunk * 8;
 
         if (global_row < k && global_col + 7 < n) {
-            prefetch_b = __ldg(reinterpret_cast<const half8 *>(
+            prefetch_b = __ldg(reinterpret_cast<const float4 *>(
                 &mat_b[global_row * n + global_col]));
         } else {
             __align__(16) __half tmp[8] = {};
@@ -430,7 +429,7 @@ gemm_optimised_kernel(int m, int n, int k,
                 }
             }
 
-            prefetch_b = *reinterpret_cast<const half8 *>(tmp);
+            prefetch_b = *reinterpret_cast<const float4 *>(tmp);
         }
     };
 
@@ -440,7 +439,7 @@ gemm_optimised_kernel(int m, int n, int k,
         int col_chunk = tid % (TILE_K / 8);
         int global_start_col = col_chunk * 8;
 
-        *reinterpret_cast<half8 *>(&tile_a[buf][row][global_start_col]) = prefetch_a;
+        *reinterpret_cast<float4 *>(&tile_a[buf][row][global_start_col]) = prefetch_a;
     };
 
     auto store_b_to_shared_mem = [&](int buf) {
@@ -448,7 +447,7 @@ gemm_optimised_kernel(int m, int n, int k,
         int col_chunk = tid % (TILE_N / 8);
         int global_start_col = col_chunk * 8;
 
-        *reinterpret_cast<half8 *>(&tile_b[buf][row][global_start_col]) = prefetch_b;
+        *reinterpret_cast<float4 *>(&tile_b[buf][row][global_start_col]) = prefetch_b;
     };
 
     // Compute a 2x2 tile with a single warp group
