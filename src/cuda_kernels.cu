@@ -526,6 +526,8 @@ void launch_gemm_optimised(int M, int N, int K,
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
         <<<grid, threads, 0, stream>>>(M, N, K, A_h, B_h, C);
 
+    cudaStreamSynchronize(stream);
+
     cudaFree(A_h);
     cudaFree(B_h);
 }
