@@ -345,7 +345,12 @@ void launch_gemm_tiled16(
 
 constexpr static int WMMA_SIZE = 16;
 
-template<int TILE_M = 64, int TILE_N = 64, int TILE_K = 64>
+// Optimised GEMM using WMMA Tensor Cores with:
+//   - Thread coarsening: each warp computes a 2x2 grid of 16x16 WMMA tiles (32x32)
+//   - Double buffering: overlaps global memory loads with Tensor Core computation
+//   - Vectorised loads: float4 (128-bit) coalesced global memory access
+//   - Shared memory padding: eliminates bank conflicts for WMMA loads
+template<int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
 __global__ void gemm_optimised_kernel(
     int m,
     int n,
@@ -353,92 +358,151 @@ __global__ void gemm_optimised_kernel(
     const float *__restrict__ mat_a,
     const float *__restrict__ mat_b,
     float *__restrict__ mat_c) {
-    // Each block computes a TILE_M x TILE_N region of C
-    // Each warp handles a WMMA_SIZE x WMMA_SIZE tile.
-    // 64 x 64 => (64 / 16) * (64 / 16) = 16 wmma groups = 16 warps
-    // 16 warps => 16 * 32 = 512 threads per block
+    // 16 warps in a 4x4 grid, each computing 2x2 WMMA tiles = 32x32 output
+    // 16 warps * 32 threads/warp = 512 threads per block
+    // Block covers TILE_M x TILE_N = 128 x 128 output elements
 
-    __shared__ __half tile_a[TILE_M][TILE_K];
-    __shared__ __half tile_b[TILE_K][TILE_N];
+    constexpr int LD_A = TILE_K + PAD;
+    constexpr int LD_B = TILE_N + PAD;
+    constexpr int WARPS_M = TILE_M / (WMMA_SIZE * 2); // 4
+    constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2); // 4
 
-    int tid = threadIdx.x;
+    __shared__ __half tile_a[2][TILE_M][LD_A];
+    __shared__ __half tile_b[2][TILE_K][LD_B];
 
-    int block_row = blockIdx.y * TILE_M;
-    int block_col = blockIdx.x * TILE_N;
+    const int tid = threadIdx.x;
+    const int block_row = blockIdx.y * TILE_M;
+    const int block_col = blockIdx.x * TILE_N;
 
-    int warp_id = tid / warpSize;
+    const int warp_id  = tid / warpSize;
+    const int warp_row = warp_id / WARPS_N; // 0..3
+    const int warp_col = warp_id % WARPS_N; // 0..3
 
-    int warp_tile_row = warp_id / (TILE_N / WMMA_SIZE);
-    int warp_tile_col = warp_id % (TILE_N / WMMA_SIZE);
+    // Each warp accumulates a 2x2 grid of 16x16 fragments
+    wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
+                   __half, wmma::row_major> frag_a[2];
+    wmma::fragment<wmma::matrix_b, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
+                   __half, wmma::row_major> frag_b[2];
+    wmma::fragment<wmma::accumulator, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
+                   float> frag_acc[2][2];
 
-    wmma::fragment<
-        wmma::matrix_a,
-        WMMA_SIZE,
-        WMMA_SIZE,
-        WMMA_SIZE,
-        __half,
-        wmma::row_major
-    > frag_a;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 2; ++j)
+            wmma::fill_fragment(frag_acc[i][j], 0.0f);
 
-    wmma::fragment<
-        wmma::matrix_b,
-        WMMA_SIZE,
-        WMMA_SIZE,
-        WMMA_SIZE,
-        __half,
-        wmma::row_major
-    > frag_b;
+    // Number of float4s to load per tile
+    constexpr int FLOAT4S_A = (TILE_M * TILE_K) / 4; // 128*32/4 = 1024
+    constexpr int FLOAT4S_B = (TILE_K * TILE_N) / 4; // 32*128/4 = 1024
 
-    wmma::fragment<
-        wmma::accumulator,
-        WMMA_SIZE,
-        WMMA_SIZE,
-        WMMA_SIZE,
-        float
-    > frag_acc;
+    const int num_k_tiles = (k + TILE_K - 1) / TILE_K;
 
-    wmma::fill_fragment(frag_acc, 0.0f);
-
-    for (int inner = 0; inner < k; inner += TILE_K) {
-        // Load tile_a
-        for (int i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
-            int r = i / TILE_K;
-            int c = i % TILE_K;
+    // === Lambda-style cooperative load using float4 ===
+    // Loads a TILE_M x TILE_K block of A and TILE_K x TILE_N block of B
+    // into shared memory buffer `buf`, converting float32 -> half
+    auto load_tile = [&](int buf, int k_offset) {
+        // Load tile_a: 128 rows x 32 cols = 4096 floats = 1024 float4s
+        for (int i = tid; i < FLOAT4S_A; i += blockDim.x) {
+            int r = i / (TILE_K / 4);
+            int c4 = i % (TILE_K / 4);
             int global_r = block_row + r;
-            int global_c = inner + c;
-            tile_a[r][c] = (global_r < m && global_c < k)
-                            ? __float2half(mat_a[global_r * k + global_c])
-                            : __half(0);
+            int global_c = k_offset + c4 * 4;
+
+            float4 val = make_float4(0.f, 0.f, 0.f, 0.f);
+            if (global_r < m && global_c + 3 < k) {
+                val = __ldg(reinterpret_cast<const float4*>(&mat_a[global_r * k + global_c]));
+            } else if (global_r < m) {
+                // Scalar fallback for boundary
+                const float *base = &mat_a[global_r * k + global_c];
+                if (global_c     < k) val.x = __ldg(base);
+                if (global_c + 1 < k) val.y = __ldg(base + 1);
+                if (global_c + 2 < k) val.z = __ldg(base + 2);
+                if (global_c + 3 < k) val.w = __ldg(base + 3);
+            }
+            int sc = c4 * 4;
+            tile_a[buf][r][sc    ] = __float2half(val.x);
+            tile_a[buf][r][sc + 1] = __float2half(val.y);
+            tile_a[buf][r][sc + 2] = __float2half(val.z);
+            tile_a[buf][r][sc + 3] = __float2half(val.w);
         }
 
-        // Load tile_b
-        for (int i = tid; i < TILE_K * TILE_N; i += blockDim.x) {
-            int r = i / TILE_N;
-            int c = i % TILE_N;
-            int global_r = inner + r;
-            int global_c = block_col + c;
-            tile_b[r][c] = (global_r < k && global_c < n)
-                            ? __float2half(mat_b[global_r * n + global_c])
-                            : __half(0);
+        // Load tile_b: 32 rows x 128 cols = 4096 floats = 1024 float4s
+        for (int i = tid; i < FLOAT4S_B; i += blockDim.x) {
+            int r = i / (TILE_N / 4);
+            int c4 = i % (TILE_N / 4);
+            int global_r = k_offset + r;
+            int global_c = block_col + c4 * 4;
+
+            float4 val = make_float4(0.f, 0.f, 0.f, 0.f);
+            if (global_r < k && global_c + 3 < n) {
+                val = __ldg(reinterpret_cast<const float4*>(&mat_b[global_r * n + global_c]));
+            } else if (global_r < k) {
+                const float *base = &mat_b[global_r * n + global_c];
+                if (global_c     < n) val.x = __ldg(base);
+                if (global_c + 1 < n) val.y = __ldg(base + 1);
+                if (global_c + 2 < n) val.z = __ldg(base + 2);
+                if (global_c + 3 < n) val.w = __ldg(base + 3);
+            }
+            int sc = c4 * 4;
+            tile_b[buf][r][sc    ] = __float2half(val.x);
+            tile_b[buf][r][sc + 1] = __float2half(val.y);
+            tile_b[buf][r][sc + 2] = __float2half(val.z);
+            tile_b[buf][r][sc + 3] = __float2half(val.w);
         }
+    };
 
-        __syncthreads();
+    // Compute on a given shared memory buffer
+    auto compute_tile = [&](int buf) {
+        const int smem_row = warp_row * 32;
+        const int smem_col = warp_col * 32;
 
-        // WMMA subtile per warp
+        #pragma unroll
         for (int kk = 0; kk < TILE_K; kk += WMMA_SIZE) {
-            wmma::load_matrix_sync(frag_a, &tile_a[warp_tile_row * WMMA_SIZE][kk], TILE_K);
-            wmma::load_matrix_sync(frag_b, &tile_b[kk][warp_tile_col * WMMA_SIZE], TILE_N);
-            wmma::mma_sync(frag_acc, frag_a, frag_b, frag_acc);
+            wmma::load_matrix_sync(frag_a[0], &tile_a[buf][smem_row     ][kk], LD_A);
+            wmma::load_matrix_sync(frag_a[1], &tile_a[buf][smem_row + 16][kk], LD_A);
+            wmma::load_matrix_sync(frag_b[0], &tile_b[buf][kk][smem_col     ], LD_B);
+            wmma::load_matrix_sync(frag_b[1], &tile_b[buf][kk][smem_col + 16], LD_B);
+
+            wmma::mma_sync(frag_acc[0][0], frag_a[0], frag_b[0], frag_acc[0][0]);
+            wmma::mma_sync(frag_acc[0][1], frag_a[0], frag_b[1], frag_acc[0][1]);
+            wmma::mma_sync(frag_acc[1][0], frag_a[1], frag_b[0], frag_acc[1][0]);
+            wmma::mma_sync(frag_acc[1][1], frag_a[1], frag_b[1], frag_acc[1][1]);
         }
+    };
+
+    // === Double-buffered main loop ===
+
+    // Prologue: load first K-tile into buffer 0
+    load_tile(0, 0);
+    __syncthreads();
+
+    for (int t = 0; t < num_k_tiles; ++t) {
+        int cur = t & 1;
+        int nxt = 1 - cur;
+
+        // Load next K-tile into the other buffer (if not last)
+        if (t + 1 < num_k_tiles) {
+            load_tile(nxt, (t + 1) * TILE_K);
+        }
+
+        // Compute WMMA on current buffer
+        compute_tile(cur);
 
         __syncthreads();
     }
 
-    // Write back to C
-    int c_row = block_row + warp_tile_row * WMMA_SIZE;
-    int c_col = block_col + warp_tile_col * WMMA_SIZE;
-    if (c_row < m && c_col < n) {
-        wmma::store_matrix_sync(&mat_c[c_row * n + c_col], frag_acc, n, wmma::mem_row_major);
+    // === Store results back to global C ===
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            int c_row = block_row + warp_row * 32 + i * WMMA_SIZE;
+            int c_col = block_col + warp_col * 32 + j * WMMA_SIZE;
+            if (c_row < m && c_col < n) {
+                wmma::store_matrix_sync(
+                    &mat_c[c_row * n + c_col],
+                    frag_acc[i][j], n, wmma::mem_row_major);
+            }
+        }
     }
 }
 
@@ -450,12 +514,16 @@ void launch_gemm_optimised(
     const float *B,
     float *C,
     cudaStream_t stream) {
-    constexpr int TILE_M = 64;
+    constexpr int TILE_M = 128;
     constexpr int TILE_N = 128;
-    constexpr int TILE_K = 64;
-    constexpr int THREADS = (TILE_M / WMMA_SIZE) * (TILE_N / WMMA_SIZE) * 32;
+    constexpr int TILE_K = 32;
+    constexpr int PAD    = 8;
+    // 4x4 warp grid, each warp covers 32x32 (2x2 coarsened WMMA tiles)
+    constexpr int NUM_WARPS = (TILE_M / 32) * (TILE_N / 32); // 16
+    constexpr int THREADS   = NUM_WARPS * warpSize;           // 512
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
-    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K><<<grid, THREADS, 0, stream>>>(M, N, K, A, B, C);
+    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
+        <<<grid, THREADS, 0, stream>>>(M, N, K, A, B, C);
     CUDA_CHECK_LAST("gemm_optimised_kernel");
 }
