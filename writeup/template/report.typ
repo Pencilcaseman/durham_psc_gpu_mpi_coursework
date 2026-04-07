@@ -64,12 +64,13 @@
   optimised: rgb("#009E73"),
 )
 
-= Hardware
+= Hardware & System
 
 All benchmarks were performed on Durham University's NCC cluster with a single
 CPU core and an NVIDIA 2080 Ti GPU with 11GB of GDDR6 VRAM and compute
-capability 7.5. The 2080 Ti GPU has a peak memory bandwidth of 616 GB/s and can
-perform 13.4 TFLOP/s in FP32 or 107 TFLOP/s in FP16. All benchmarks were
+capability 7.5. The 2080 Ti GPU has a peak memory bandwidth of
+$616 "GBs"^(-1)$ and can perform $13.4 "TFLOPs"^(-1)$ in FP32 or
+$107 "TFLOPs"^(-1)$ in FP16. All benchmarks were
 compiled using CUDA 12.4 and Intel OneAPI MPI 2024.1.0.
 
 = Vector Operations
@@ -87,7 +88,7 @@ compiled using CUDA 12.4 and Intel OneAPI MPI 2024.1.0.
     scope: "column",
     lq.diagram(
       xlabel: [Vector Size ($N$)],
-      ylabel: [Effective Bandwidth (GB/s)],
+      ylabel: [Effective Bandwidth ($"GBs"^(-1)$)],
       width: 100%,
       height: 4.75cm,
       xscale: "log",
@@ -138,9 +139,9 @@ bandwidth is low. As the problem size exceeds the number of CUDA cores on the
 GPU, memory transfers can be overlapped with compute and memory bandwidth
 becomes the bottleneck.
 
-The 2080 Ti GPU has a maximum memory throughput of $616 "GB/s"$ and the
+The 2080 Ti GPU has a maximum memory throughput of $616 "GBs"^(-1)$ and the
 highest recorded throughput in the vector triad operations was
-$553.3 "GB/s"$, suggesting that the kernels were not able to fully
+$553.3 "GBs"^(-1)$, suggesting that the kernels were not able to fully
 saturate the memory bus, even at large problem sizes. Effective bandwidth is
 computed as the total bytes transferred divided by the kernel time. AXPY and ADD
 each read two arrays and write one ($3 N times 4$ bytes), COPY reads one and
@@ -174,7 +175,7 @@ to degradation in performance.
     scope: "column",
     lq.diagram(
       xlabel: [Number of MPI Ranks],
-      ylabel: [Aggregate Bandwidth (GB/s)],
+      ylabel: [Aggregate Bandwidth ($"GBs"^(-1)$)],
       width: 100%,
       height: 4.75cm,
       xlim: (0.5, 4.5),
@@ -214,7 +215,7 @@ to degradation in performance.
     ),
     caption: [
       Aggregate memory bandwidth across MPI ranks for $N = 50 times 10^6$. Dashed
-      line shows 2080 Ti peak (616 GB/s).
+      line shows 2080 Ti peak ($616 "GBs"^(-1)$).
     ],
   )
 }<vector_triad_aggregate_mpi_bandwidth>
@@ -232,7 +233,7 @@ reduced via a warp-level reduction into another partial sum. Another pass of the
 reduction algorithm on the partial sums is enough to compute the final result.
 We load data as `float4` arrays to maximise memory bandwidth and ensure that all
 threads in a warp are active to achieve the best possible performance, reaching
-$546.1 "GB/s"$, matching the vector triad bandwidth.
+$546.1 "GBs"^(-1)$, matching the vector triad bandwidth.
 
 IEEE 754 32-bit floating point numbers have a 23-bit mantissa, allowing for
 relative error on the order of $1/2^23$. Additionally, we can approximate the
@@ -271,9 +272,12 @@ reducing performance by almost a third from its peak. The maximum observed error
 was $0.000019$. For small matrices the L2 cache is sufficient to keep the GPU
 fed and the naive implementation performs competitively with the tiled version.
 
-The tiled implementation reuses data more efficiently and can avoid the
-penalties incurred by fetching data from VRAM, reaching a peak throughput of
-$1556.5 "GFLOP/s"$ with a maximum error of $0.000019$.
+The tiled implementation uses $32 times 32$ tiles loaded into shared memory
+with `__syncthreads()` barriers between tile loads and computation to prevent
+data races. Each thread accumulates its output element across all tiles along
+the $K$ dimension, reusing data more efficiently and avoiding the penalties of
+fetching from VRAM. This reaches a peak throughput of $1556.5 "GFLOPs"^(-1)$ with a
+maximum error of $0.000019$.
 
 By efficiently tiling the matrices, using tensor cores and reducing the
 precision of the multiplications, the optimised algorithm is over 20 times
@@ -291,7 +295,7 @@ faster than the tiled version and yet has an error of just $0.011714$.
     scope: "column",
     lq.diagram(
       xlabel: [Matrix Size (M = N = K)],
-      ylabel: [GFLOP/s],
+      ylabel: [$"GFLOPs"^(-1)$],
       width: 100%,
       height: 4.75cm,
       yscale: "log",
@@ -321,7 +325,7 @@ faster than the tiled version and yet has an error of just $0.011714$.
         stroke: colours.optimised,
       ),
     ),
-    caption: [GEMM throughput (GFLOP/s) for each kernel at varying matrix sizes with a single MPI rank.],
+    caption: [GEMM throughput ($"GFLOPs"^(-1)$) for each kernel at varying matrix sizes with a single MPI rank.],
   )
 }<gemm_throughput>
 
@@ -339,7 +343,7 @@ faster than the tiled version and yet has an error of just $0.011714$.
     scope: "column",
     lq.diagram(
       xlabel: [Number of MPI Ranks],
-      ylabel: [Aggregate GFLOP/s],
+      ylabel: [Aggregate $"GFLOPs"^(-1)$],
       width: 100%,
       height: 4.75cm,
       xlim: (0.5, 4.5),
@@ -370,7 +374,7 @@ faster than the tiled version and yet has an error of just $0.011714$.
         stroke: colours.optimised,
       ),
     ),
-    caption: [Aggregate GFLOP/s for GEMM kernels as MPI ranks increase, showing scaling on a single GPU.],
+    caption: [Aggregate $"GFLOPs"^(-1)$ for GEMM kernels as MPI ranks increase, showing scaling on a single GPU.],
   )
 }<strong-scaling>
 
@@ -421,6 +425,37 @@ faster than the tiled version and yet has an error of just $0.011714$.
   )
 }<strong-scaling-time>
 
+#{
+  let opt_scaling = summary
+    .filter(r => r.mode == "gemm" and r.kernel == "optimised" and r.M == 16384)
+    .sorted(key: r => r.num_ranks)
+
+  figure(
+    placement: none,
+    scope: "column",
+    table(
+      columns: 5,
+      align: (left, right, right, right, right),
+      table.header[Ranks][Compute (ms)][Comm (ms)][Total (ms)][Comm %],
+      ..opt_scaling
+        .map(r => {
+          let total = r.ms + r.gbs
+          let pct = r.gbs / total * 100
+          (
+            [#r.num_ranks],
+            [#calc.round(r.ms, digits: 1)],
+            [#calc.round(r.gbs, digits: 1)],
+            [#calc.round(total, digits: 1)],
+            [#calc.round(pct, digits: 1)%],
+          )
+        })
+        .flatten(),
+    ),
+    caption: [Compute and communication time for the optimised GEMM kernel at $M = N = K = 16384$.],
+  )
+}<scaling-table>
+
+For a fixed problem size of $M = N = K = 16384$,
 #ref(<strong-scaling>) and #ref(<strong-scaling-time>) show that the GPU
 throughput and compute time are not dependent on the number of MPI ranks used.
 This is because the GPU is fully occupied by the computation and there is no way

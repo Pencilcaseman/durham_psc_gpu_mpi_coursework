@@ -1,100 +1,48 @@
-# COMP3741 – MPI & CUDA Coursework
+# COMP3741 -- MPI & CUDA Coursework
 
-## Project structure
+## Notes
 
-```
-.
-├── CMakeLists.txt # Build configuration
-├── include # Include directory
-│   └── coursework
-│       ├── benchmarks.hpp
-│       ├── check_cuda.hpp
-│       ├── cli.hpp
-│       ├── cpu_reference.hpp
-│       ├── kernels.hpp
-│       ├── mpi_distribution.hpp
-│       ├── mpi_utils.hpp
-│       ├── timer.hpp
-│       └── util.hpp
-├── justfile # Useful for quick commands
-├── ncc_report.slurm # Generate data for the report
-├── ncc_run.slurm # Run some tests
-├── ncc_scaling.slurm # (Deprecated -- use ncc_report)
-├── README.md
-├── setup.sh # Used to configure the environment on NCC
-├── src # Source
-│   ├── benchmarks.cpp
-│   ├── cpu_reference.cpp
-│   ├── cuda_kernels.cu
-│   ├── main.cpp
-│   ├── mpi_distribution.cpp
-│   └── util.cpp
-├── tests
-│   └── test_main.cpp
-└── writeup # Report source code
-    ├── lib.typ
-    ├── template
-    │   ├── data
-    │   │   ├── NVIDIA Nsight Systems 2026-04-07 at 11.42.02@2x.png
-    │   │   └── results.csv
-    │   ├── refs.bib
-    │   ├── report_page1.png
-    │   ├── report_page2.png
-    │   ├── report.pdf
-    │   └── report.typ
-    └── typst.toml
+- All MPI ranks share **GPU 0**
+- The optimised GEMM converts to float16 for tensor cores and accumulates back
+  into float32
+- Warp size of 32 (NVIDIA GPUs)
+- Compiled for **sm_75** (Turing)
+- Random data seeded deterministically per rank (`seed = offset + rank`)
+- GEMM validation is skipped for matrices exceeding 1M elements
 
-8 directories, 32 files
-```
+## Build and Run (NCC)
 
-## Single-GPU assumption
-All MPI ranks share **one GPU (device 0)**. Each rank allocates its own device
-memory and launches its own CUDA kernels. No multi-GPU or peer-access code is
-needed.
-
-## Build (NCC cluster)
 ```bash
-module purge
-module load cuda openmpi cmake
-
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
+sbatch ncc_run.slurm      # single-rank smoke test
+sbatch ncc_report.slurm   # full benchmark suite + Nsight profiling
 ```
 
-> **CUDA architecture**: edit `CUDA_ARCHITECTURES` in `CMakeLists.txt` if
-> your GPU is not V100 (sm_70) or A100 (sm_80).
-> Run `nvidia-smi` to find the GPU model, then look up its compute capability.
+Or locally with [just](https://github.com/casey/just):
 
-## Run
 ```bash
-# AXPY bandwidth test
-mpirun -np 2 ./build/mpi_cuda_coursework --mode axpy --N 50000000 --csv results.csv
-
-# Parallel reduction
-mpirun -np 2 ./build/mpi_cuda_coursework --mode reduce --N 50000000 --csv results.csv
-
-# GEMM – naive kernel
-mpirun -np 2 ./build/mpi_cuda_coursework --mode gemm \
-    --M 4096 --N 4096 --K 4096 --kernel naive --csv results.csv
-
-# GEMM – tiled kernel
-mpirun -np 2 ./build/mpi_cuda_coursework --mode gemm \
-    --M 4096 --N 4096 --K 4096 --kernel tiled --csv results.csv
+source setup.sh
+just build release
 ```
 
-## Correctness tests
+## Modes
+
+| Mode                      | Description                                  |
+|---------------------------|----------------------------------------------|
+| `axpy`                    | `y = a*x + y` bandwidth benchmark            |
+| `add`                     | `z = x + y` bandwidth benchmark              |
+| `copy`                    | `y = x` bandwidth benchmark                  |
+| `reduce`                  | Parallel sum with warp-level tree reduction  |
+| `gemm --kernel naive`     | One thread per output element, global memory |
+| `gemm --kernel tiled`     | 32x32 shared-memory tiles                    |
+| `gemm --kernel optimised` | F16 WMMA with double-buffered 128x128 tiles  |
+
+## Correctness Tests
+
 ```bash
-mpirun -np 2 ./build/mpi_cuda_tests
+mpiexec -np 2 slurm_build/mpi_cuda_tests
 ```
 
-## SLURM (NCC)
-```bash
-sbatch ncc_run.slurm        # 2-rank run
-sbatch ncc_scaling.slurm    # strong-scaling sweep
-```
+## Output
 
-## Reproducibility
-- Random data is seeded deterministically (`seed = base + rank`).
-- Each CSV row is tagged with the MPI rank, mode, kernel, and problem size.
-- Warm-up kernel launches precede all timed runs.
+- `results.csv` -- timings appended per run (rank, mode, kernel, size, ms, GFLOP/s, GB/s)
+- `nsys_profiles/` -- Nsight Systems traces from `ncc_report.slurm`
