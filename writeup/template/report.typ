@@ -13,27 +13,29 @@
   // Parse CSV into array of dicts, keeping only rank 0 rows
   let raw = csv("data/results.csv")
   let headers = raw.at(0)
-  let all_rows = raw.slice(1).map(row => {
-    let d = (:)
-    for (i, h) in headers.enumerate() {
-      d.insert(h, row.at(i))
-    }
-    // Parse numeric fields
-    (
-      rank: int(d.rank),
-      num_ranks: int(d.num_ranks),
-      mode: d.mode,
-      kernel: d.kernel,
-      N: int(d.N),
-      global_N: int(d.global_N),
-      M: int(d.M),
-      Nmat: int(d.Nmat),
-      K: int(d.K),
-      ms: float(d.ms_gpu),
-      gflops: float(d.GFLOPs),
-      gbs: float(d.GBs),
-    )
-  })
+  let all_rows = raw
+    .slice(1)
+    .map(row => {
+      let d = (:)
+      for (i, h) in headers.enumerate() {
+        d.insert(h, row.at(i))
+      }
+      // Parse numeric fields
+      (
+        rank: int(d.rank),
+        num_ranks: int(d.num_ranks),
+        mode: d.mode,
+        kernel: d.kernel,
+        N: int(d.N),
+        global_N: int(d.global_N),
+        M: int(d.M),
+        Nmat: int(d.Nmat),
+        K: int(d.K),
+        ms: float(d.ms_gpu),
+        gflops: float(d.GFLOPs),
+        gbs: float(d.GBs),
+      )
+    })
 
   // Only use rank 0 data for reporting
   let summary = all_rows.filter(r => r.rank == 0)
@@ -47,7 +49,9 @@
 
   let filter_gemm(kernel, np: 1) = {
     summary
-      .filter(r => r.mode == "gemm" and r.kernel == kernel and r.num_ranks == np)
+      .filter(r => (
+        r.mode == "gemm" and r.kernel == kernel and r.num_ranks == np
+      ))
       .sorted(key: r => r.M)
   }
 
@@ -85,31 +89,40 @@
         placement: none,
         scope: "column",
         lq.diagram(
-          title: [Bandwidth vs Problem Size (NP=1)],
           xlabel: [Vector Size (N)],
           ylabel: [Effective Bandwidth (GB/s)],
           width: 100%,
           xscale: "log",
+          ylim: (0, auto),
+          legend: (position: right + bottom),
 
           lq.plot(
             axpy_data.map(r => r.global_N),
             axpy_data.map(r => r.gbs),
-            mark: "o", label: [AXPY], stroke: colours.axpy,
+            mark: "o",
+            label: [AXPY],
+            stroke: colours.axpy,
           ),
           lq.plot(
             add_data.map(r => r.global_N),
             add_data.map(r => r.gbs),
-            mark: "s", label: [ADD], stroke: colours.add,
+            mark: "s",
+            label: [ADD],
+            stroke: colours.add,
           ),
           lq.plot(
             copy_data.map(r => r.global_N),
             copy_data.map(r => r.gbs),
-            mark: "x", label: [COPY], stroke: colours.copy,
+            mark: "x",
+            label: [COPY],
+            stroke: colours.copy,
           ),
           lq.plot(
             reduce_data.map(r => r.global_N),
             reduce_data.map(r => r.gbs),
-            mark: "^", label: [Reduce], stroke: colours.reduce,
+            mark: "^",
+            label: [Reduce],
+            stroke: colours.reduce,
           ),
         ),
         caption: [Effective memory bandwidth for vector operations and reduction at varying problem sizes with a single MPI rank.],
@@ -137,31 +150,40 @@
         placement: none,
         scope: "column",
         lq.diagram(
-          title: [Aggregate Bandwidth vs MPI Ranks (N=50M)],
           xlabel: [Number of MPI Ranks],
           ylabel: [Aggregate Bandwidth (GB/s)],
           width: 100%,
           xlim: (0.5, 4.5),
+          ylim: (0, auto),
+          legend: (position: left + top),
 
           lq.plot(
             axpy_s.map(r => r.num_ranks),
             axpy_s.map(r => r.gbs * r.num_ranks),
-            mark: "o", label: [AXPY], stroke: colours.axpy,
+            mark: "o",
+            label: [AXPY],
+            stroke: colours.axpy,
           ),
           lq.plot(
             add_s.map(r => r.num_ranks),
             add_s.map(r => r.gbs * r.num_ranks),
-            mark: "s", label: [ADD], stroke: colours.add,
+            mark: "s",
+            label: [ADD],
+            stroke: colours.add,
           ),
           lq.plot(
             copy_s.map(r => r.num_ranks),
             copy_s.map(r => r.gbs * r.num_ranks),
-            mark: "x", label: [COPY], stroke: colours.copy,
+            mark: "x",
+            label: [COPY],
+            stroke: colours.copy,
           ),
           lq.plot(
             reduce_s.map(r => r.num_ranks),
             reduce_s.map(r => r.gbs * r.num_ranks),
-            mark: "^", label: [Reduce], stroke: colours.reduce,
+            mark: "^",
+            label: [Reduce],
+            stroke: colours.reduce,
           ),
           lq.hlines(616, stroke: (dash: "dashed", paint: gray)),
         ),
@@ -195,27 +217,34 @@
         placement: none,
         scope: "column",
         lq.diagram(
-          title: [GEMM Performance vs Problem Size (NP=1)],
           xlabel: [Matrix Size (M = N = K)],
           ylabel: [GFLOP/s],
           width: 100%,
           yscale: "log",
           xscale: "log",
+          ylim: (1, auto),
+          legend: (position: left + top),
 
           lq.plot(
             naive_data.map(r => r.M),
             naive_data.map(r => r.gflops),
-            mark: "o", label: [Naive], stroke: colours.naive,
+            mark: "o",
+            label: [Naive],
+            stroke: colours.naive,
           ),
           lq.plot(
             tiled_data.map(r => r.M),
             tiled_data.map(r => r.gflops),
-            mark: "s", label: [Tiled], stroke: colours.tiled,
+            mark: "s",
+            label: [Tiled],
+            stroke: colours.tiled,
           ),
           lq.plot(
             opt_data.map(r => r.M),
             opt_data.map(r => r.gflops),
-            mark: "x", label: [Optimised], stroke: colours.optimised,
+            mark: "x",
+            label: [Optimised],
+            stroke: colours.optimised,
           ),
         ),
         caption: [GEMM throughput (GFLOP/s) for each kernel at varying matrix sizes with a single MPI rank.],
@@ -238,26 +267,34 @@
         placement: none,
         scope: "column",
         lq.diagram(
-          title: [GEMM Strong Scaling: Aggregate Throughput (#str(target) #sym.times #str(target))],
           xlabel: [Number of MPI Ranks],
           ylabel: [Aggregate GFLOP/s],
           width: 100%,
           xlim: (0.5, 4.5),
+          yscale: "log",
+          ylim: (1, auto),
+          legend: (position: right + bottom),
 
           lq.plot(
             naive_s.map(r => r.num_ranks),
             naive_s.map(r => r.gflops * r.num_ranks),
-            mark: "o", label: [Naive], stroke: colours.naive,
+            mark: "o",
+            label: [Naive],
+            stroke: colours.naive,
           ),
           lq.plot(
             tiled_s.map(r => r.num_ranks),
             tiled_s.map(r => r.gflops * r.num_ranks),
-            mark: "s", label: [Tiled], stroke: colours.tiled,
+            mark: "s",
+            label: [Tiled],
+            stroke: colours.tiled,
           ),
           lq.plot(
             opt_s.map(r => r.num_ranks),
             opt_s.map(r => r.gflops * r.num_ranks),
-            mark: "x", label: [Optimised], stroke: colours.optimised,
+            mark: "x",
+            label: [Optimised],
+            stroke: colours.optimised,
           ),
         ),
         caption: [Aggregate GFLOP/s for GEMM kernels as MPI ranks increase, showing scaling on a single GPU.],
@@ -278,26 +315,34 @@
         placement: none,
         scope: "column",
         lq.diagram(
-          title: [GEMM Rank 0 Compute Time (#str(target) #sym.times #str(target))],
           xlabel: [Number of MPI Ranks],
           ylabel: [Compute Time (ms)],
           width: 100%,
           xlim: (0.5, 4.5),
+          yscale: "log",
+          ylim: (1, auto),
+          legend: (position: right + bottom),
 
           lq.plot(
             naive_s.map(r => r.num_ranks),
             naive_s.map(r => r.ms),
-            mark: "o", label: [Naive], stroke: colours.naive,
+            mark: "o",
+            label: [Naive],
+            stroke: colours.naive,
           ),
           lq.plot(
             tiled_s.map(r => r.num_ranks),
             tiled_s.map(r => r.ms),
-            mark: "s", label: [Tiled], stroke: colours.tiled,
+            mark: "s",
+            label: [Tiled],
+            stroke: colours.tiled,
           ),
           lq.plot(
             opt_s.map(r => r.num_ranks),
             opt_s.map(r => r.ms),
-            mark: "x", label: [Optimised], stroke: colours.optimised,
+            mark: "x",
+            label: [Optimised],
+            stroke: colours.optimised,
           ),
         ),
         caption: [Rank 0 compute time for GEMM kernels as MPI ranks increase. Each rank computes fewer rows, but GPU contention limits speedup.],

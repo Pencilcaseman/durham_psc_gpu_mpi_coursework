@@ -135,9 +135,12 @@ int main(int argc, char **argv) {
             stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
+        MPI_Barrier(MPI_COMM_WORLD);
         GpuTimer gt;
         gt.start(stream);
         launch_axpy((int)d.N_local, alpha, dx, dy, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_Barrier(MPI_COMM_WORLD);
         float ms = gt.stop(stream);
 
         util::cuda_memcpy_checked(
@@ -235,11 +238,12 @@ int main(int argc, char **argv) {
             stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
+        MPI_Barrier(MPI_COMM_WORLD);
         GpuTimer gt;
         gt.start(stream);
-
         launch_add((int)d.N_local, dx, dy, dz, stream);
-
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_Barrier(MPI_COMM_WORLD);
         float ms = gt.stop(stream);
 
         util::cuda_memcpy_checked(
@@ -315,9 +319,12 @@ int main(int argc, char **argv) {
             dy, y.data(), d.N_local, cudaMemcpyHostToDevice, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
+        MPI_Barrier(MPI_COMM_WORLD);
         GpuTimer gt;
         gt.start(stream);
         launch_copy((int)d.N_local, dx, dy, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_Barrier(MPI_COMM_WORLD);
         float ms = gt.stop(stream);
 
         util::cuda_memcpy_checked(
@@ -371,9 +378,12 @@ int main(int argc, char **argv) {
             dx, x.data(), d.N_local, cudaMemcpyHostToDevice, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
+        MPI_Barrier(MPI_COMM_WORLD);
         GpuTimer gt;
         gt.start(stream);
         float local_gpu = gpu_reduce_sum(dx, (int)d.N_local, scratch, stream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_Barrier(MPI_COMM_WORLD);
         float ms        = gt.stop(stream);
 
         // Combine partial sums from all ranks
