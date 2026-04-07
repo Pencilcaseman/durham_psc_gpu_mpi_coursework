@@ -30,8 +30,10 @@ rm -f $CSV
 # Part A1 -- Vector operations: bandwidth vs N, with MPI scaling
 # ==========================================================================
 
+VEC_SIZES="10 50 100 500 1000 5000 10000 50000 100000 500000 1000000 2000000 5000000 10000000 20000000 50000000"
+
 for MODE in axpy add copy; do
-    for N in 100000 500000 1000000 2000000 5000000 10000000 20000000 50000000; do
+    for N in $VEC_SIZES; do
         for NP in 1 2 3 4; do
             echo "--- $MODE N=$N NP=$NP ---"
             mpiexec -np $NP $BIN --mode $MODE --N $N --csv $CSV
@@ -43,7 +45,7 @@ done
 # Part A2 -- Reduction: correctness + performance
 # ==========================================================================
 
-for N in 100000 500000 1000000 2000000 5000000 10000000 20000000 50000000; do
+for N in $VEC_SIZES; do
     for NP in 1 2 3 4; do
         echo "--- reduce N=$N NP=$NP ---"
         mpiexec -np $NP $BIN --mode reduce --N $N --csv $CSV
