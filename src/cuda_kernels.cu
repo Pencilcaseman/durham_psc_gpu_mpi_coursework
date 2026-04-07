@@ -495,8 +495,8 @@ gemm_optimised_kernel(int m, int n, int k,
     global_load_a(0);
     global_load_b(0);
 
-    store_a_to_smem(0);
-    store_b_to_smem(0);
+    store_a_to_shared_mem(0);
+    store_b_to_shared_mem(0);
 
     __syncthreads();
 
