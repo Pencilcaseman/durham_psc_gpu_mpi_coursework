@@ -312,30 +312,32 @@ void launch_gemm_tiled16(
 
 constexpr static int WMMA_SIZE = 16;
 
-// ---------- FP32 -> FP16 conversion kernel ----------
 __global__ void convert_f32_to_f16(const float *__restrict__ in,
                                    __half *__restrict__ out, int count) {
-    int i = (blockIdx.x * blockDim.x + threadIdx.x) * 8;
-    if (i + 7 < count) {
-        float4 a = __ldg(reinterpret_cast<const float4 *>(in + i));
-        float4 b = __ldg(reinterpret_cast<const float4 *>(in + i + 4));
+    int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 8;
+
+    if (idx + 7 < count) {
+        float4 a = __ldg(reinterpret_cast<const float4 *>(in + idx + 0));
+        float4 b = __ldg(reinterpret_cast<const float4 *>(in + idx + 4));
+
         __half2 h0 = __floats2half2_rn(a.x, a.y);
         __half2 h1 = __floats2half2_rn(a.z, a.w);
         __half2 h2 = __floats2half2_rn(b.x, b.y);
         __half2 h3 = __floats2half2_rn(b.z, b.w);
-        *reinterpret_cast<__half2 *>(out + i)     = h0;
-        *reinterpret_cast<__half2 *>(out + i + 2) = h1;
-        *reinterpret_cast<__half2 *>(out + i + 4) = h2;
-        *reinterpret_cast<__half2 *>(out + i + 6) = h3;
+
+        *reinterpret_cast<__half2 *>(out + idx + 0) = h0;
+        *reinterpret_cast<__half2 *>(out + idx + 2) = h1;
+        *reinterpret_cast<__half2 *>(out + idx + 4) = h2;
+        *reinterpret_cast<__half2 *>(out + idx + 6) = h3;
     } else {
-        for (int j = 0; j < 8 && i + j < count; ++j)
-            out[i + j] = __float2half(in[i + j]);
+        for (int j = 0; j < 8 && idx + j < count; ++j)
+            out[idx + j] = __float2half(in[idx + j]);
     }
 }
 
 void launch_convert_f32_to_f16(const float *in, __half *out, int count,
                                cudaStream_t stream) {
-    int threads = 256;
+    int threads = 1024;
     int blocks = (count + threads * 8 - 1) / (threads * 8);
     convert_f32_to_f16<<<blocks, threads, 0, stream>>>(in, out, count);
 }
@@ -352,15 +354,20 @@ void launch_convert_f32_to_f16(const float *in, __half *out, int count,
 // Bank conflicts: LD_A/2=20 banks, gcd(20,32)=4 → 4-way conflicts.
 // This is acceptable; eliminating them requires PTX mma.sync + ldmatrix.
 //
-template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
+
+// NOTE: Padding must fit these requirements:
+// - wmma::load_matrix_sync requires 16-byte aligned row stride, so PAD must
+//   equal 0 % 8
+// -
+template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32>
 __global__ void __launch_bounds__(512, 1)
 gemm_optimised_kernel(int m, int n, int k,
                       const __half *__restrict__ mat_a,
                       const __half *__restrict__ mat_b,
                       float *__restrict__ mat_c) {
 
-    constexpr int LD_A = TILE_K + PAD;   // 40
-    constexpr int LD_B = TILE_N + PAD;   // 136
+    constexpr int LD_A = TILE_K ;   // 40
+    constexpr int LD_B = TILE_N;   // 136
     constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2);  // 4
 
     __shared__ __half tile_a[2][TILE_M][LD_A];
@@ -528,16 +535,16 @@ void launch_gemm_optimised(int M, int N, int K,
     launch_convert_f32_to_f16(A, A_h, M * K, stream);
     launch_convert_f32_to_f16(B, B_h, K * N, stream);
 
-    constexpr int TILE_M = 128, TILE_N = 128, TILE_K = 32, PAD = 8;
+    constexpr int TILE_M = 128, TILE_N = 128, TILE_K = 32;
     constexpr int threads = ((TILE_M / 32) * (TILE_N / 32)) * 32;  // 512
 
     cudaFuncSetAttribute(
-        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
+        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K>,
         cudaFuncAttributePreferredSharedMemoryCarveout,
         cudaSharedmemCarveoutMaxShared);
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
-    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
+    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K>
         <<<grid, threads, 0, stream>>>(M, N, K, A_h, B_h, C);
 
     cudaStreamSynchronize(stream);
