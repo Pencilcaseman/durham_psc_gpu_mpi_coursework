@@ -5,9 +5,11 @@
 void append_csv(
     const std::string &path,
     int rank,
+    int num_ranks,
     const std::string &mode,
     const std::string &kernel,
     long long N,
+    long long global_N,
     int M,
     int Nmat,
     int K,
@@ -30,15 +32,17 @@ void append_csv(
         return;
     }
     if (write_header) {
-        std::fprintf(f, "rank,mode,kernel,N,M,Nmat,K,ms_gpu,GFLOPs,GBs\n");
+        std::fprintf(f, "rank,num_ranks,mode,kernel,N,global_N,M,Nmat,K,ms_gpu,GFLOPs,GBs\n");
     }
     std::fprintf(
         f,
-        "%d,%s,%s,%lld,%d,%d,%d,%.6f,%.3f,%.3f\n",
+        "%d,%d,%s,%s,%lld,%lld,%d,%d,%d,%.6f,%.3f,%.3f\n",
         rank,
+        num_ranks,
         mode.c_str(),
         kernel.c_str(),
         N,
+        global_N,
         M,
         Nmat,
         K,

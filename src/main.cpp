@@ -166,9 +166,11 @@ int main(int argc, char **argv) {
         append_csv(
             csv,
             info.rank,
+            info.size,
             "axpy",
             "axpy",
             d.N_local,
+            N,
             0,
             0,
             0,
@@ -266,9 +268,11 @@ int main(int argc, char **argv) {
         append_csv(
             csv,
             info.rank,
+            info.size,
             "add",
             "add",
             d.N_local,
+            N,
             0,
             0,
             0,
@@ -333,7 +337,7 @@ int main(int argc, char **argv) {
         }
 
         append_csv(
-            csv, info.rank, "copy", "copy", d.N_local, 0, 0, 0, ms, 0.0, gbs);
+            csv, info.rank, info.size, "copy", "copy", d.N_local, N, 0, 0, 0, ms, 0.0, gbs);
 
         CUDA_CHECK(cudaFree(dx));
         CUDA_CHECK(cudaFree(dy));
@@ -409,7 +413,7 @@ int main(int argc, char **argv) {
                       << (err < tol ? "  PASS" : "  FAIL") << "\n";
         }
 
-        append_csv(csv, info.rank, "reduce", "tree", N, 0, 0, 0, ms, 0.0, gbs);
+        append_csv(csv, info.rank, info.size, "reduce", "tree", N, N, 0, 0, 0, ms, 0.0, gbs);
 
         CUDA_CHECK(cudaFree(dx));
         CUDA_CHECK(cudaFree(scratch));
@@ -540,8 +544,10 @@ int main(int argc, char **argv) {
         append_csv(
             csv,
             info.rank,
+            info.size,
             "gemm",
             kernel,
+            0,
             0,
             M,
             Nmat,

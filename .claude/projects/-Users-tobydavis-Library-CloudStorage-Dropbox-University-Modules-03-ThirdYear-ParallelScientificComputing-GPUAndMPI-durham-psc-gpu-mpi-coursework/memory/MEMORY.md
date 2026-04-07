@@ -1,0 +1,2 @@
+- [Explain don't write](feedback_explain_not_write.md) — User wants algorithm explanations, not code written for them (coursework)
+- [Typst Lilaq plots](feedback_typst_lilaq.md) — Use Lilaq in Typst for plots, not Python/matplotlib

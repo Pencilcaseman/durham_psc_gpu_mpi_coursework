@@ -31,7 +31,7 @@ rm -f $CSV
 # ==========================================================================
 
 for MODE in axpy add copy; do
-    for N in 1000000 5000000 10000000 50000000; do
+    for N in 100000 500000 1000000 2000000 5000000 10000000 20000000 50000000; do
         for NP in 1 2 3 4; do
             echo "--- $MODE N=$N NP=$NP ---"
             mpiexec -np $NP $BIN --mode $MODE --N $N --csv $CSV
@@ -43,7 +43,7 @@ done
 # Part A2 -- Reduction: correctness + performance
 # ==========================================================================
 
-for N in 1000000 5000000 10000000 50000000; do
+for N in 100000 500000 1000000 2000000 5000000 10000000 20000000 50000000; do
     for NP in 1 2 3 4; do
         echo "--- reduce N=$N NP=$NP ---"
         mpiexec -np $NP $BIN --mode reduce --N $N --csv $CSV
@@ -54,19 +54,10 @@ done
 # Part B -- GEMM: naive vs tiled vs optimised, varying size and ranks
 # ==========================================================================
 
-# Naive: cap at 8192 (16384 too slow for naive)
-for SIZE in 512 1024 2048 4096 8192 16384; do
-    for NP in 1 2 3 4; do
-        echo "--- gemm naive M=$SIZE NP=$NP ---"
-        mpiexec -np $NP $BIN \
-            --mode gemm --M $SIZE --N $SIZE --K $SIZE \
-            --kernel naive --csv $CSV
-    done
-done
-
-# Tiled + optimised: can go larger
-for KERNEL in tiled optimised; do
-    for SIZE in 512 1024 2048 4096 8192 16384; do
+# All kernels use the same sizes for consistent comparison.
+# Naive at 16384 takes ~22s but is within budget.
+for KERNEL in naive tiled optimised; do
+    for SIZE in 256 512 768 1024 1536 2048 3072 4096 6144 8192 12288 16384; do
         for NP in 1 2 3 4; do
             echo "--- gemm $KERNEL M=$SIZE NP=$NP ---"
             mpiexec -np $NP $BIN \
