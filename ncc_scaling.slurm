@@ -8,7 +8,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=slurm_output/scaling-%j.out
 
-set -euxo pipefail
+set -euo pipefail
 
 module purge
 module load cuda/12.4
@@ -23,22 +23,24 @@ CSV=scaling_results.csv
 
 # Vector operations: vary size and ranks
 for MODE in axpy add copy; do
-    for N in 1000000 10000000 50000000 100000000; do
+    for N in 1000000 5000000 10000000 50000000 100000000; do
         for NP in 1 2 4; do
             echo "=== $MODE N=$N NP=$NP ==="
             mpiexec -np $NP build/mpi_cuda_coursework \
                 --mode $MODE --N $N --csv $CSV
         done
     done
+    echo ""
 done
 
 # Reduce: vary size and ranks
-for N in 1000000 10000000 50000000 100000000; do
+for N in 1000000 5000000 10000000 50000000 100000000; do
     for NP in 1 2 4; do
         echo "=== reduce N=$N NP=$NP ==="
         mpiexec -np $NP build/mpi_cuda_coursework \
             --mode reduce --N $N --csv $CSV
     done
+    echo ""
 done
 
 # GEMM: vary size, kernel, and ranks
@@ -50,5 +52,9 @@ for KERNEL in naive tiled optimised; do
                 --mode gemm --M $SIZE --N $SIZE --K $SIZE \
                 --kernel $KERNEL --csv $CSV
         done
+        echo ""
     done
+
+    echo ""
+    echo ""
 done
