@@ -1,29 +1,50 @@
-# COMP3741 – MPI + CUDA Coursework Starter
+# COMP3741 – MPI & CUDA Coursework
 
 ## Project structure
+
 ```
 .
-├── CMakeLists.txt
+├── CMakeLists.txt # Build configuration
+├── include # Include directory
+│   └── coursework
+│       ├── benchmarks.hpp
+│       ├── check_cuda.hpp
+│       ├── cli.hpp
+│       ├── cpu_reference.hpp
+│       ├── kernels.hpp
+│       ├── mpi_distribution.hpp
+│       ├── mpi_utils.hpp
+│       ├── timer.hpp
+│       └── util.hpp
+├── justfile # Useful for quick commands
+├── ncc_report.slurm # Generate data for the report
+├── ncc_run.slurm # Run some tests
+├── ncc_scaling.slurm # (Deprecated -- use ncc_report)
 ├── README.md
-├── include/          # All header files
-│   ├── benchmarks.hpp
-│   ├── check_cuda.hpp
-│   ├── cli.hpp
-│   ├── cpu_reference.hpp
-│   ├── kernels.hpp
-│   ├── mpi_distribution.hpp
-│   ├── mpi_utils.hpp
-│   └── timer.hpp
-├── src/              # Implementation files
-│   ├── benchmarks.cpp
-│   ├── cpu_reference.cpp
-│   ├── cuda_kernels.cu
-│   ├── main.cpp
-│   └── mpi_distribution.cpp
-├── tests/
-│   └── test_main.cpp
-├── ncc_run.slurm     # Single run (2 ranks, 1 GPU)
-└── ncc_scaling.slurm # Strong-scaling sweep (1/2/4 ranks, 1 GPU)
+├── setup.sh # Used to configure the environment on NCC
+├── src # Source
+│   ├── benchmarks.cpp
+│   ├── cpu_reference.cpp
+│   ├── cuda_kernels.cu
+│   ├── main.cpp
+│   ├── mpi_distribution.cpp
+│   └── util.cpp
+├── tests
+│   └── test_main.cpp
+└── writeup # Report source code
+    ├── lib.typ
+    ├── template
+    │   ├── data
+    │   │   ├── NVIDIA Nsight Systems 2026-04-07 at 11.42.02@2x.png
+    │   │   └── results.csv
+    │   ├── refs.bib
+    │   ├── report_page1.png
+    │   ├── report_page2.png
+    │   ├── report.pdf
+    │   └── report.typ
+    └── typst.toml
+
+8 directories, 32 files
 ```
 
 ## Single-GPU assumption
@@ -42,7 +63,7 @@ cmake --build . -j
 ```
 
 > **CUDA architecture**: edit `CUDA_ARCHITECTURES` in `CMakeLists.txt` if
-> your GPU is not V100 (sm_70) or A100 (sm_80).  
+> your GPU is not V100 (sm_70) or A100 (sm_80).
 > Run `nvidia-smi` to find the GPU model, then look up its compute capability.
 
 ## Run

@@ -4,7 +4,6 @@
   title: [Parallel Scientific Computing: GPU & MPI],
   author: "Toby Davis (cltz62)",
   institution: "Durham University",
-  // bibliography: bibliography("refs.bib"),
 )
 
 #let parse-results() = {
@@ -56,13 +55,13 @@
 }
 
 #let colours = (
-  axpy: rgb("#e41a1c"),
-  add: rgb("#377eb8"),
-  copy: rgb("#4daf4a"),
-  reduce: rgb("#984ea3"),
-  naive: rgb("#e41a1c"),
-  tiled: rgb("#377eb8"),
-  optimised: rgb("#4daf4a"),
+  axpy: rgb("#0072B2"),
+  add: rgb("#E69F00"),
+  copy: rgb("#009E73"),
+  reduce: rgb("#CC79A7"),
+  naive: rgb("#0072B2"),
+  tiled: rgb("#E69F00"),
+  optimised: rgb("#009E73"),
 )
 
 = Hardware
@@ -90,6 +89,7 @@ compiled using CUDA 12.4 and Intel OneAPI MPI 2024.1.0.
       xlabel: [Vector Size ($N$)],
       ylabel: [Effective Bandwidth (GB/s)],
       width: 100%,
+      height: 4.75cm,
       xscale: "log",
       ylim: (0, auto),
       legend: (position: right + bottom),
@@ -119,7 +119,7 @@ compiled using CUDA 12.4 and Intel OneAPI MPI 2024.1.0.
         reduce_data.map(r => r.global_N),
         reduce_data.map(r => r.gbs),
         mark: "^",
-        label: [Reduce],
+        label: [Reduction],
         stroke: colours.reduce,
       ),
     ),
@@ -130,12 +130,30 @@ compiled using CUDA 12.4 and Intel OneAPI MPI 2024.1.0.
   )
 }<vector_triad_effective_bandwidth>
 
-The vector triad operations `AXPY`, `ADD` and `COPY` all show very similar
-memory bandwidth characteristics across different problem sizes. For small
-$N$, there is not enough data to fully saturate the GPU memory bus and CUDA
-cores, so memory latencies dominate and bandwidth is low. As the problem size
-exceeds the number of CUDA cores on the GPU, memory transfers can be overlapped
-with compute and memory bandwidth becomes the bottleneck.
+The vector triad operations shown in #ref(<vector_triad_effective_bandwidth>)
+all show very similar memory bandwidth characteristics across different problem
+sizes. For small $N$, there is not enough data to fully saturate the GPU memory
+bus and CUDA cores, so memory and kernel dispatch latencies dominate and
+bandwidth is low. As the problem size exceeds the number of CUDA cores on the
+GPU, memory transfers can be overlapped with compute and memory bandwidth
+becomes the bottleneck.
+
+The 2080 Ti GPU has a maximum memory throughput of $616 "GB/s"$ and the
+highest recorded throughput in the vector triad operations was
+$553.3 "GB/s"$, suggesting that the kernels were not able to fully
+saturate the memory bus, even at large problem sizes. Effective bandwidth is
+computed as the total bytes transferred divided by the kernel time. AXPY and ADD
+each read two arrays and write one ($3 N times 4$ bytes), COPY reads one and
+writes one ($2 N times 4$ bytes), and the reduction reads a single array
+($N times 4$ bytes).
+
+#ref(<vector_triad_aggregate_mpi_bandwidth>) shows the total bandwidth across
+all MPI ranks for a fixed problem size and varying numbers of MPI ranks.
+Increasing the number of MPI ranks reduces the amount of data each rank must
+process and reduces its effective bandwidth, as shown in
+#ref(<vector_triad_effective_bandwidth>). While some of this computation can be
+overlapped, the overhead of doing so reduces the available parallelism and leads
+to degradation in performance.
 
 #{
   let target_N = 50000000
@@ -158,7 +176,9 @@ with compute and memory bandwidth becomes the bottleneck.
       xlabel: [Number of MPI Ranks],
       ylabel: [Aggregate Bandwidth (GB/s)],
       width: 100%,
+      height: 4.75cm,
       xlim: (0.5, 4.5),
+      xaxis: (ticks: (1, 2, 3, 4)),
       ylim: (0, auto),
       legend: (position: left + bottom),
 
@@ -187,18 +207,17 @@ with compute and memory bandwidth becomes the bottleneck.
         reduce_s.map(r => r.num_ranks),
         reduce_s.map(r => r.gbs * r.num_ranks),
         mark: "^",
-        label: [Reduce],
+        label: [Reduction],
         stroke: colours.reduce,
       ),
       lq.hlines(616, stroke: (dash: "dashed", paint: gray)),
     ),
     caption: [
-      Aggregate memory bandwidth across MPI ranks for N=$50 times 10^6$. Dashed
+      Aggregate memory bandwidth across MPI ranks for $N = 50 times 10^6$. Dashed
       line shows 2080 Ti peak (616 GB/s).
     ],
   )
 }<vector_triad_aggregate_mpi_bandwidth>
-
 
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION: Reduction
@@ -206,11 +225,59 @@ with compute and memory bandwidth becomes the bottleneck.
 
 == Reduction
 
+We implemented a tree-reduction algorithm with warp-level primitives to reduce
+synchronisation overhead. We spawn at most 256 blocks, each containing 1024
+threads. Each thread reduces a section of the problem into a local sum, which is
+reduced via a warp-level reduction into another partial sum. Another pass of the
+reduction algorithm on the partial sums is enough to compute the final result.
+We load data as `float4` arrays to maximise memory bandwidth and ensure that all
+threads in a warp are active to achieve the best possible performance, reaching
+$546.1 "GB/s"$, matching the vector triad bandwidth.
+
+IEEE 754 32-bit floating point numbers have a 23-bit mantissa, allowing for
+relative error on the order of $1/2^23$. Additionally, we can approximate the
+sum as a random walk of length $N$, so $sum_i x_i approx sqrt(N)$. Hence, we can
+estimate the floating point error on a reduction of $N = 50 times 10^6$
+elements uniformly centred around 0 as
+
+#eq_no_num(
+  $
+    1 / (2^("mantissa")) times sqrt(N) approx 1.192 times 10^(-7) times 7071.067 approx 0.00084.
+  $,
+)
+
+The maximum error observed with our reduction algorithm is $0.000732422$,
+measured by comparing the GPU result against a double-precision CPU reference sum
+across multiple random seeds. This confirms the algorithm is numerically stable
+for large $N$.
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION: GEMM
 // ═════════════════════════════════════════════════════════════════════════════
 
 = General Matrix Multiply (GEMM)
+
+In addition to the naive and tiled implementations, we implemented an optimised
+F16 tiled WMMA algorithm which multiplies in F16 and accumulates into F32.
+#ref(<gemm_throughput>) shows the performance of each GEMM algorithm over varying
+matrix sizes.
+
+The naive implementation assigns one thread per output element, so each thread
+independently loads an entire row of $A$ and column of $B$ from global memory
+with no data reuse between threads. This gives an arithmetic intensity of
+roughly one floating point operation per four bytes loaded. Once the input
+matrices exceed the L2 cache, every access goes to VRAM at full latency,
+reducing performance by almost a third from its peak. The maximum observed error
+was $0.000019$. For small matrices the L2 cache is sufficient to keep the GPU
+fed and the naive implementation performs competitively with the tiled version.
+
+The tiled implementation reuses data more efficiently and can avoid the
+penalties incurred by fetching data from VRAM, reaching a peak throughput of
+$1556.5 "GFLOP/s"$ with a maximum error of $0.000019$.
+
+By efficiently tiling the matrices, using tensor cores and reducing the
+precision of the multiplications, the optimised algorithm is over 20 times
+faster than the tiled version and yet has an error of just $0.011714$.
 
 == Problem Size Scaling
 
@@ -226,8 +293,9 @@ with compute and memory bandwidth becomes the bottleneck.
       xlabel: [Matrix Size (M = N = K)],
       ylabel: [GFLOP/s],
       width: 100%,
+      height: 4.75cm,
       yscale: "log",
-      xscale: "log",
+      xscale: lq.scale.log(base: 2),
       ylim: (1, auto),
       legend: (position: left + top),
 
@@ -255,7 +323,7 @@ with compute and memory bandwidth becomes the bottleneck.
     ),
     caption: [GEMM throughput (GFLOP/s) for each kernel at varying matrix sizes with a single MPI rank.],
   )
-}
+}<gemm_throughput>
 
 == Strong Scaling
 
@@ -273,7 +341,9 @@ with compute and memory bandwidth becomes the bottleneck.
       xlabel: [Number of MPI Ranks],
       ylabel: [Aggregate GFLOP/s],
       width: 100%,
+      height: 4.75cm,
       xlim: (0.5, 4.5),
+      xaxis: (ticks: (1, 2, 3, 4)),
       yscale: "log",
       ylim: (1, auto),
       legend: (position: right + bottom),
@@ -302,7 +372,7 @@ with compute and memory bandwidth becomes the bottleneck.
     ),
     caption: [Aggregate GFLOP/s for GEMM kernels as MPI ranks increase, showing scaling on a single GPU.],
   )
-}
+}<strong-scaling>
 
 #{
   let target = 16384
@@ -318,7 +388,9 @@ with compute and memory bandwidth becomes the bottleneck.
       xlabel: [Number of MPI Ranks],
       ylabel: [Compute Time (ms)],
       width: 100%,
+      height: 4.75cm,
       xlim: (0.5, 4.5),
+      xaxis: (ticks: (1, 2, 3, 4)),
       yscale: "log",
       ylim: (1, auto),
       legend: (position: right + bottom),
@@ -347,6 +419,49 @@ with compute and memory bandwidth becomes the bottleneck.
     ),
     caption: [Rank 0 compute time for GEMM kernels as MPI ranks increase. Each rank computes fewer rows, but GPU contention limits speedup.],
   )
-}
+}<strong-scaling-time>
+
+#ref(<strong-scaling>) and #ref(<strong-scaling-time>) show that the GPU
+throughput and compute time are not dependent on the number of MPI ranks used.
+This is because the GPU is fully occupied by the computation and there is no way
+to overlap the per-rank computation, so they run near-sequentially and the
+runtime is unaffected.
+
+Communication time was measured separately via an MPI barrier before each kernel
+launch. In the worst case, communication jitter takes 26.5% of the total time.
+On average, however, communication accounts for only 7.93% of the total runtime. This suggests
+that MPI communication is not the bottleneck, and that a more optimised GEMM
+implementation would lead to consistently better performance.
+
+The factor limiting the scaling of the GEMM kernel is the GPU's compute
+throughput and memory bandwidth. If distinct GPUs could be assigned per rank,
+the throughput could be expected to scale linearly with the number of ranks due
+to the almost negligible communication overhead.
 
 == Profiled Results
+
+#figure(
+  placement: none,
+  scope: "column",
+  image("data/NVIDIA Nsight Systems 2026-04-07 at 11.42.02@2x.png"),
+  caption: [Profiling a 2-rank benchmark in Nsight Systems],
+)<profile>
+
+The profiling results shown in #ref(<profile>) report that only 5.4% of the time
+is spent in `convert_f32_to_f16`, with the remaining 94.6% of the time being
+spent in the WMMA GEMM kernel. It is clear that further optimisation efforts
+should be focused on the compute-intensive GEMM kernel rather than the simple
+and fast data cast/copy. The profile also shows that memory copies dominate the
+runtime of the program and therefore should be avoided at all costs.
+
+The profile also shows that very minimal time is spent in MPI
+communication, which is consistent with the benchmark results above. GPU idle
+time between kernel launches is negligible, confirming that the device is
+compute-bound. Each rank launches both the F32-to-F16 conversion and the WMMA
+GEMM, with launches separated only by the implicit synchronisation between them.
+
+Given more time, we would write inline PTX to better overlap memory loads with
+compute and to gain finer control over tile sizes. On newer GPU architectures
+(sm_80+), WMMA supports F32 operands, which would eliminate the precision
+penalty of F16 while retaining tensor core throughput.
+
