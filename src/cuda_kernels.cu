@@ -342,26 +342,25 @@ void launch_convert_f32_to_f16(const float *in, __half *out, int count,
 
 // ---------- Optimised GEMM ----------
 //
-// PAD=2 rationale:
-//   LD_A = 32 + 2 = 34 halves.  34/2 = 17 four-byte banks.  gcd(17, 32) = 1  ✓
-//   LD_B = 128 + 2 = 130 halves. 130/2 = 65 four-byte banks. gcd(65, 32) = 1  ✓
-//   Total smem = 2*(128*34 + 32*130)*2 = 34,048 bytes ≈ 33.25 KB
+// PAD must satisfy TWO constraints simultaneously:
+//   1. wmma::load_matrix_sync requires the row stride (LD * sizeof(__half))
+//      to be 16-byte aligned, so LD must be a multiple of 8.
+//   2. Smem stores of 8 halves use __half2 (4-byte aligned) to avoid the
+//      16-byte alignment requirement of float4 on non-power-of-two strides.
 //
-// __launch_bounds__(512, 1):
-//   512 threads/CTA is fixed.  minBlocks=1 because 2 CTAs would need ~66 KB
-//   smem which exceeds Turing's 64 KB max.  With minBlocks=1 the compiler gets
-//   128 regs/thread budget (65536 / 512) — generous, no spills.
+// PAD=8 → LD_A=40 (multiple of 8 ✓), LD_B=136 (multiple of 8 ✓)
+// Bank conflicts: LD_A/2=20 banks, gcd(20,32)=4 → 4-way conflicts.
+// This is acceptable; eliminating them requires PTX mma.sync + ldmatrix.
 //
-template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 2>
+template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
 __global__ void __launch_bounds__(512, 1)
 gemm_optimised_kernel(int m, int n, int k,
                       const __half *__restrict__ mat_a,
                       const __half *__restrict__ mat_b,
                       float *__restrict__ mat_c) {
 
-    constexpr int LD_A = TILE_K + PAD;   // 34
-    constexpr int LD_B = TILE_N + PAD;   // 130
-
+    constexpr int LD_A = TILE_K + PAD;   // 40
+    constexpr int LD_B = TILE_N + PAD;   // 136
     constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2);  // 4
 
     __shared__ __half tile_a[2][TILE_M][LD_A];
@@ -384,19 +383,21 @@ gemm_optimised_kernel(int m, int n, int k,
 
     const int num_k_tiles = (k + TILE_K - 1) / TILE_K;
 
-    // Register prefetch buffers (1 float4 = 8 halves per thread, per matrix)
+    // Register prefetch buffers
     float4 prefetch_a, prefetch_b;
 
+    // --- Global → register ---
     auto global_load_a = [&](int k_offset) {
-        int r  = tid / (TILE_K / 8);
-        int c8 = tid % (TILE_K / 8);
+        int r  = tid / (TILE_K / 8);   // 0..127
+        int c8 = tid % (TILE_K / 8);   // 0..3
         int gr = block_row + r;
         int gc = k_offset + c8 * 8;
         if (gr < m && gc + 7 < k) {
             prefetch_a = __ldg(reinterpret_cast<const float4 *>(
                 &mat_a[gr * k + gc]));
         } else {
-            __half tmp[8] = {};
+            // Scalar fallback — use aligned local storage
+            __align__(16) __half tmp[8] = {};
             if (gr < m)
                 for (int j = 0; j < 8 && gc + j < k; ++j)
                     tmp[j] = __ldg(&mat_a[gr * k + gc + j]);
@@ -405,15 +406,15 @@ gemm_optimised_kernel(int m, int n, int k,
     };
 
     auto global_load_b = [&](int k_offset) {
-        int r  = tid / (TILE_N / 8);
-        int c8 = tid % (TILE_N / 8);
+        int r  = tid / (TILE_N / 8);   // 0..31
+        int c8 = tid % (TILE_N / 8);   // 0..15
         int gr = k_offset + r;
         int gc = block_col + c8 * 8;
         if (gr < k && gc + 7 < n) {
             prefetch_b = __ldg(reinterpret_cast<const float4 *>(
                 &mat_b[gr * n + gc]));
         } else {
-            __half tmp[8] = {};
+            __align__(16) __half tmp[8] = {};
             if (gr < k)
                 for (int j = 0; j < 8 && gc + j < n; ++j)
                     tmp[j] = __ldg(&mat_b[gr * n + gc + j]);
@@ -421,12 +422,7 @@ gemm_optimised_kernel(int m, int n, int k,
         }
     };
 
-    // auto store_a_to_smem = [&](int buf) {
-    //     int r  = tid / (TILE_K / 8);
-    //     int c8 = tid % (TILE_K / 8);
-    //     *reinterpret_cast<float4 *>(&tile_a[buf][r][c8 * 8]) = prefetch_a;
-    // };
-
+    // --- Register → smem (using __half2 stores for safe 4-byte alignment) ---
     auto store_a_to_smem = [&](int buf) {
         int r  = tid / (TILE_K / 8);
         int c8 = tid % (TILE_K / 8);
@@ -438,12 +434,6 @@ gemm_optimised_kernel(int m, int n, int k,
         reinterpret_cast<__half2 *>(base)[2] = src[2];
         reinterpret_cast<__half2 *>(base)[3] = src[3];
     };
-
-    // auto store_b_to_smem = [&](int buf) {
-    //     int r  = tid / (TILE_N / 8);
-    //     int c8 = tid % (TILE_N / 8);
-    //     *reinterpret_cast<float4 *>(&tile_b[buf][r][c8 * 8]) = prefetch_b;
-    // };
 
     auto store_b_to_smem = [&](int buf) {
         int r  = tid / (TILE_N / 8);
@@ -457,6 +447,7 @@ gemm_optimised_kernel(int m, int n, int k,
         reinterpret_cast<__half2 *>(base)[3] = src[3];
     };
 
+    // --- Compute on smem buffer ---
     auto compute_tile = [&](int buf) {
         wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
                        __half, wmma::row_major> frag_a[2];
@@ -537,10 +528,9 @@ void launch_gemm_optimised(int M, int N, int K,
     launch_convert_f32_to_f16(A, A_h, M * K, stream);
     launch_convert_f32_to_f16(B, B_h, K * N, stream);
 
-    constexpr int TILE_M = 128, TILE_N = 128, TILE_K = 32, PAD = 2;
+    constexpr int TILE_M = 128, TILE_N = 128, TILE_K = 32, PAD = 8;
     constexpr int threads = ((TILE_M / 32) * (TILE_N / 32)) * 32;  // 512
 
-    // Opt into max smem carveout on Turing (up to 64 KB from the 96 KB L1/smem)
     cudaFuncSetAttribute(
         gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
         cudaFuncAttributePreferredSharedMemoryCarveout,
@@ -551,7 +541,7 @@ void launch_gemm_optimised(int M, int N, int K,
         <<<grid, threads, 0, stream>>>(M, N, K, A_h, B_h, C);
 
     cudaStreamSynchronize(stream);
-
     cudaFree(A_h);
     cudaFree(B_h);
 }
+
