@@ -356,8 +356,6 @@ __global__ void gemm_optimised_kernel(
     // 64 x 64 => (64 / 16) * (64 / 16) = 16 wmma groups = 16 warps
     // 16 warps => 16 * 32 = 512 threads per block
 
-    namespace wmma = nvcuda::wmma;
-
     __shared__ __half tile_a[TILE_M][TILE_K];
     __shared__ __half tile_b[TILE_K][TILE_N];
 
@@ -371,33 +369,33 @@ __global__ void gemm_optimised_kernel(
     int warp_tile_row = warp_id / (TILE_N / WMMA_SIZE);
     int warp_tile_col = warp_id % (TILE_N / WMMA_SIZE);
 
-    wmma::fragment<
-        wmma::matrix_a,
+    nvcuda::wmma::fragment<
+        nvcuda::wmma::matrix_a,
         WMMA_SIZE,
         WMMA_SIZE,
         WMMA_SIZE,
         __half,
-        wmma::row_major
+        nvcuda::wmma::row_major
     > frag_a;
 
-    wmma::fragment<
-        wmma::matrix_b,
+    nvcuda::wmma::fragment<
+        nvcuda::wmma::matrix_b,
         WMMA_SIZE,
         WMMA_SIZE,
         WMMA_SIZE,
         __half,
-        wmma::row_major
+        nvcuda::wmma::row_major
     > frag_b;
 
-    wmma::fragment<
-        wmma::accumulator,
+    nvcuda::wmma::fragment<
+        nvcuda::wmma::accumulator,
         WMMA_SIZE,
         WMMA_SIZE,
         WMMA_SIZE,
         float
     > frag_acc;
 
-    wmma::fill_fragment(frag_acc, 0.0f);
+    nvcuda::wmma::fill_fragment(frag_acc, 0.0f);
 
     for (int inner = 0; inner < k; inner += TILE_K) {
         // Load tile_a
@@ -426,9 +424,9 @@ __global__ void gemm_optimised_kernel(
 
         // WMMA subtile per warp
         for (int kk = 0; kk < TILE_K; kk += WMMA_SIZE) {
-            wmma::load_matrix_sync(frag_a, &tile_a[warp_tile_row * WMMA_SIZE][kk], TILE_K);
-            wmma::load_matrix_sync(frag_b, &tile_b[kk][warp_tile_col * WMMA_SIZE], TILE_N);
-            wmma::mma_sync(frag_acc, frag_a, frag_b, frag_acc);
+            nvcuda::wmma::load_matrix_sync(frag_a, &tile_a[warp_tile_row * WMMA_SIZE][kk], TILE_K);
+            nvcuda::wmma::load_matrix_sync(frag_b, &tile_b[kk][warp_tile_col * WMMA_SIZE], TILE_N);
+            nvcuda::wmma::mma_sync(frag_acc, frag_a, frag_b, frag_acc);
         }
 
         __syncthreads();
@@ -438,7 +436,7 @@ __global__ void gemm_optimised_kernel(
     int c_row = block_row + warp_tile_row * WMMA_SIZE;
     int c_col = block_col + warp_tile_col * WMMA_SIZE;
     if (c_row < m && c_col < n) {
-        wmma::store_matrix_sync(&mat_c[c_row * n + c_col], frag_acc, n, wmma::mem_row_major);
+        nvcuda::wmma::store_matrix_sync(&mat_c[c_row * n + c_col], frag_acc, n, nvcuda::wmma::mem_row_major);
     }
 }
 
