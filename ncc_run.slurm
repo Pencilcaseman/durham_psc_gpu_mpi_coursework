@@ -12,7 +12,7 @@ set -euxo pipefail
 
 export NUM_RANKS=1
 
-module load cuda
+module load cuda/12.4
 module load intel-oneapi/2024.1.0/mpi
 
 mkdir -p slurm_build && pushd slurm_build

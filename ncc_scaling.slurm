@@ -9,7 +9,7 @@
 #SBATCH --output=scaling-%j.out
 
 module purge
-module load cuda
+module load cuda/12.4
 module load intel-oneapi/2024.1.0/mpi
 
 mkdir -p build && cd build
