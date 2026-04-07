@@ -417,6 +417,8 @@ gemm_optimised_kernel(int m, int n, int k,
         int global_row = k_offset + tile_row;
         int global_col = block_col + col_chunk * 8;
 
+        if (tile_row >= TILE_K) return;
+
         if (global_row < k && global_col + 7 < n) {
             prefetch_b = __ldg(reinterpret_cast<const float4 *>(
                 &mat_b[global_row * n + global_col]));
@@ -444,6 +446,7 @@ gemm_optimised_kernel(int m, int n, int k,
 
     auto store_b_to_shared_mem = [&](int buf) {
         int row  = tid / (TILE_N / 8);
+        if (row >= TILE_K) return;
         int col_chunk = tid % (TILE_N / 8);
         int global_start_col = col_chunk * 8;
 
