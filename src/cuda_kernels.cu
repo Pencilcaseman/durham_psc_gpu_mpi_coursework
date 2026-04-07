@@ -342,33 +342,24 @@ void launch_convert_f32_to_f16(const float *in, __half *out, int count,
     convert_f32_to_f16<<<blocks, threads, 0, stream>>>(in, out, count);
 }
 
-// ---------- Optimised GEMM ----------
-//
-// PAD must satisfy TWO constraints simultaneously:
-//   1. wmma::load_matrix_sync requires the row stride (LD * sizeof(__half))
-//      to be 16-byte aligned, so LD must be a multiple of 8.
-//   2. Smem stores of 8 halves use __half2 (4-byte aligned) to avoid the
-//      16-byte alignment requirement of float4 on non-power-of-two strides.
-//
-// PAD=8 → LD_A=40 (multiple of 8 ✓), LD_B=136 (multiple of 8 ✓)
-// Bank conflicts: LD_A/2=20 banks, gcd(20,32)=4 → 4-way conflicts.
-// This is acceptable; eliminating them requires PTX mma.sync + ldmatrix.
-//
+alignas(16) struct half8 {
+    // __half2 is the largest half-precision type CUDA provodies, for some reason
+    __half2 data[4];
+};
 
-// NOTE: Padding must fit these requirements:
-// - wmma::load_matrix_sync requires 16-byte aligned row stride, so PAD must
-//   equal 0 % 8
-// -
-template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32>
+// NOTE: wmma::load_matrix_sync requires 16-byte aligned row stride, so PAD
+// must equal 0 % 8. This could probably be improved by writing inline PTX, but
+// that is a lot of work :/
+template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
 __global__ void __launch_bounds__(512, 1)
 gemm_optimised_kernel(int m, int n, int k,
                       const __half *__restrict__ mat_a,
                       const __half *__restrict__ mat_b,
                       float *__restrict__ mat_c) {
 
-    constexpr int LD_A = TILE_K ;   // 40
-    constexpr int LD_B = TILE_N;   // 136
-    constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2);  // 4
+    constexpr int LD_A = TILE_K + PAD;
+    constexpr int LD_B = TILE_N + PAD;
+    constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2);
 
     __shared__ __half tile_a[2][TILE_M][LD_A];
     __shared__ __half tile_b[2][TILE_K][LD_B];
@@ -383,97 +374,115 @@ gemm_optimised_kernel(int m, int n, int k,
 
     wmma::fragment<wmma::accumulator, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, float>
         frag_acc[2][2];
-    #pragma unroll
-    for (int i = 0; i < 2; ++i)
-        for (int j = 0; j < 2; ++j)
-            wmma::fill_fragment(frag_acc[i][j], 0.0f);
+
+    wmma::fill_fragment(frag_acc[0][0], 0.0F);
+    wmma::fill_fragment(frag_acc[0][1], 0.0F);
+    wmma::fill_fragment(frag_acc[1][0], 0.0F);
+    wmma::fill_fragment(frag_acc[1][1], 0.0F);
 
     const int num_k_tiles = (k + TILE_K - 1) / TILE_K;
 
     // Register prefetch buffers
-    float4 prefetch_a, prefetch_b;
+    half8 prefetch_a;
+    half8 prefetch_b;
 
-    // --- Global → register ---
+    // Load from global memory into prefetch buffer
     auto global_load_a = [&](int k_offset) {
-        int r  = tid / (TILE_K / 8);   // 0..127
-        int c8 = tid % (TILE_K / 8);   // 0..3
-        int gr = block_row + r;
-        int gc = k_offset + c8 * 8;
-        if (gr < m && gc + 7 < k) {
-            prefetch_a = __ldg(reinterpret_cast<const float4 *>(
-                &mat_a[gr * k + gc]));
+        int tile_row  = tid / (TILE_K / 8);
+        int col_chunk = tid % (TILE_K / 8);
+        int global_row = block_row + tile_row;
+        int global_col = k_offset + col_chunk * 8;
+
+        if (global_row < m && global_col + 7 < k) {
+            // A bit dodgy but it works
+            prefetch_a = __ldg(reinterpret_cast<const half8 *>(
+                &mat_a[global_row * k + global_col])
+            );
         } else {
-            // Scalar fallback — use aligned local storage
+            // Scalar fallback
             __align__(16) __half tmp[8] = {};
-            if (gr < m)
-                for (int j = 0; j < 8 && gc + j < k; ++j)
-                    tmp[j] = __ldg(&mat_a[gr * k + gc + j]);
-            prefetch_a = *reinterpret_cast<float4 *>(tmp);
+
+            if (global_row < m) {
+                for (int j = 0; j < 8 && global_col + j < k; ++j) {
+                    tmp[j] = __ldg(&mat_a[global_row * k + global_col + j]);
+                }
+            }
+
+            prefetch_a = *reinterpret_cast<const half8 *>(tmp);
         }
     };
 
     auto global_load_b = [&](int k_offset) {
-        int r  = tid / (TILE_N / 8);   // 0..31
-        int c8 = tid % (TILE_N / 8);   // 0..15
-        int gr = k_offset + r;
-        int gc = block_col + c8 * 8;
-        if (gr < k && gc + 7 < n) {
-            prefetch_b = __ldg(reinterpret_cast<const float4 *>(
-                &mat_b[gr * n + gc]));
+        int tile_row  = tid / (TILE_N / 8);
+        int col_chunk = tid % (TILE_N / 8);
+        int global_row = k_offset + tile_row;
+        int global_col = block_col + col_chunk * 8;
+
+        if (global_row < k && global_col + 7 < n) {
+            prefetch_b = __ldg(reinterpret_cast<const half8 *>(
+                &mat_b[global_row * n + global_col]));
         } else {
             __align__(16) __half tmp[8] = {};
-            if (gr < k)
-                for (int j = 0; j < 8 && gc + j < n; ++j)
-                    tmp[j] = __ldg(&mat_b[gr * n + gc + j]);
-            prefetch_b = *reinterpret_cast<float4 *>(tmp);
+
+            if (global_row < k) {
+                for (int j = 0; j < 8 && global_col + j < n; ++j) {
+                    tmp[j] = __ldg(&mat_b[global_row * n + global_col + j]);
+                }
+            }
+
+            prefetch_b = *reinterpret_cast<const half8 *>(tmp);
         }
     };
 
-    // --- Register → smem (using __half2 stores for safe 4-byte alignment) ---
-    auto store_a_to_smem = [&](int buf) {
-        int r  = tid / (TILE_K / 8);
-        int c8 = tid % (TILE_K / 8);
-        int sc = c8 * 8;
-        __half *base = &tile_a[buf][r][sc];
-        __half2 *src = reinterpret_cast<__half2 *>(&prefetch_a);
-        reinterpret_cast<__half2 *>(base)[0] = src[0];
-        reinterpret_cast<__half2 *>(base)[1] = src[1];
-        reinterpret_cast<__half2 *>(base)[2] = src[2];
-        reinterpret_cast<__half2 *>(base)[3] = src[3];
+    // Copy from register to somewhere ins hared memory
+    auto store_a_to_shared_mem = [&](int buf) {
+        int row  = tid / (TILE_K / 8);
+        int col_chunk = tid % (TILE_K / 8);
+        int global_start_col = col_chunk * 8;
+
+        *reinterpret_cast<half8 *>(&tile_a[buf][row][global_start_col]) = prefetch_a;
     };
 
-    auto store_b_to_smem = [&](int buf) {
-        int r  = tid / (TILE_N / 8);
-        int c8 = tid % (TILE_N / 8);
-        int sc = c8 * 8;
-        __half *base = &tile_b[buf][r][sc];
-        __half2 *src = reinterpret_cast<__half2 *>(&prefetch_b);
-        reinterpret_cast<__half2 *>(base)[0] = src[0];
-        reinterpret_cast<__half2 *>(base)[1] = src[1];
-        reinterpret_cast<__half2 *>(base)[2] = src[2];
-        reinterpret_cast<__half2 *>(base)[3] = src[3];
+    auto store_b_to_shared_mem = [&](int buf) {
+        int row  = tid / (TILE_N / 8);
+        int col_chunk = tid % (TILE_N / 8);
+        int global_start_col = col_chunk * 8;
+
+        *reinterpret_cast<half8 *>(&tile_b[buf][row][global_start_col]) = prefetch_b;
     };
 
-    // --- Compute on smem buffer ---
+    // Compute a 2x2 tile with a single warp group
     auto compute_tile = [&](int buf) {
-        wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
-                       __half, wmma::row_major> frag_a[2];
-        wmma::fragment<wmma::matrix_b, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE,
-                       __half, wmma::row_major> frag_b[2];
+        wmma::fragment<
+            wmma::matrix_a,
+            WMMA_SIZE,
+            WMMA_SIZE,
+            WMMA_SIZE,
+            __half,
+            wmma::row_major
+        > frag_a[2];
 
-        const int smem_row = warp_row * 32;
-        const int smem_col = warp_col * 32;
+        wmma::fragment<
+            wmma::matrix_b,
+            WMMA_SIZE,
+            WMMA_SIZE,
+            WMMA_SIZE,
+            __half,
+            wmma::row_major
+        > frag_b[2];
+
+        const int shared_mem_row = warp_row * 32;
+        const int shared_mem_col = warp_col * 32;
 
         #pragma unroll
-        for (int kk = 0; kk < TILE_K; kk += WMMA_SIZE) {
-            wmma::load_matrix_sync(frag_a[0],
-                &tile_a[buf][smem_row     ][kk], LD_A);
-            wmma::load_matrix_sync(frag_a[1],
-                &tile_a[buf][smem_row + 16][kk], LD_A);
-            wmma::load_matrix_sync(frag_b[0],
-                &tile_b[buf][kk][smem_col     ], LD_B);
-            wmma::load_matrix_sync(frag_b[1],
-                &tile_b[buf][kk][smem_col + 16], LD_B);
+        for (int sub_k = 0; sub_k < TILE_K; sub_k += WMMA_SIZE) {
+            // Load A tiles
+            wmma::load_matrix_sync(frag_a[0], &tile_a[buf][shared_mem_row + 00][sub_k], LD_A);
+            wmma::load_matrix_sync(frag_a[1], &tile_a[buf][shared_mem_row + 16][sub_k], LD_A);
+
+            // Load B tile
+            wmma::load_matrix_sync(frag_b[0], &tile_b[buf][sub_k][shared_mem_col + 00], LD_B);
+            wmma::load_matrix_sync(frag_b[1], &tile_b[buf][sub_k][shared_mem_col + 16], LD_B);
 
             wmma::mma_sync(frag_acc[0][0], frag_a[0], frag_b[0], frag_acc[0][0]);
             wmma::mma_sync(frag_acc[0][1], frag_a[0], frag_b[1], frag_acc[0][1]);
@@ -482,73 +491,83 @@ gemm_optimised_kernel(int m, int n, int k,
         }
     };
 
-    // === Prologue ===
+    // Load initial segment
     global_load_a(0);
     global_load_b(0);
+
     store_a_to_smem(0);
     store_b_to_smem(0);
+
     __syncthreads();
 
-    // === Main loop ===
     for (int t = 0; t < num_k_tiles - 1; ++t) {
-        int cur = t & 1;
-        int nxt = 1 - cur;
+        // Swap between [0] and [1] each iteration to overlap compute and data
+        // copy. Easier to do this asynchronously, but 2080 Ti does not support
+        // that :(
+
+        int current_buffer = t & 1;
+        int next_buffer = 1 - current_buffer;
 
         global_load_a((t + 1) * TILE_K);
         global_load_b((t + 1) * TILE_K);
 
-        compute_tile(cur);
+        compute_tile(current_buffer);
 
         __syncthreads();
 
-        store_a_to_smem(nxt);
-        store_b_to_smem(nxt);
+        store_a_to_shared_mem(next_buffer);
+        store_b_to_shared_mem(next_buffer);
 
         __syncthreads();
     }
 
-    // === Epilogue ===
+    // Do the final set of tiles without faffing about with copying to shared
+    // memory
     if (num_k_tiles > 0)
         compute_tile((num_k_tiles - 1) & 1);
 
-    // === Store C ===
+    // Write back to C
+
     #pragma unroll
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
             int c_row = block_row + warp_row * 32 + i * WMMA_SIZE;
             int c_col = block_col + warp_col * 32 + j * WMMA_SIZE;
-            if (c_row < m && c_col < n)
+
+            if (c_row < m && c_col < n) {
                 wmma::store_matrix_sync(&mat_c[c_row * n + c_col],
                                         frag_acc[i][j], n,
                                         wmma::mem_row_major);
+            }
         }
     }
 }
 
-// ---------- Launch ----------
 void launch_gemm_optimised(int M, int N, int K,
                            const float *A, const float *B, float *C,
                            cudaStream_t stream) {
-    __half *A_h, *B_h;
-    cudaMalloc(&A_h, (size_t)M * K * sizeof(__half));
-    cudaMalloc(&B_h, (size_t)K * N * sizeof(__half));
-    launch_convert_f32_to_f16(A, A_h, M * K, stream);
-    launch_convert_f32_to_f16(B, B_h, K * N, stream);
+    __half *a_half, *b_half;
 
-    constexpr int TILE_M = 128, TILE_N = 128, TILE_K = 32;
-    constexpr int threads = ((TILE_M / 32) * (TILE_N / 32)) * 32;  // 512
+    cudaMalloc(&a_half, M * K * sizeof(__half));
+    cudaMalloc(&b_half, K * N * sizeof(__half));
+
+    launch_convert_f32_to_f16(A, a_half, M * K, stream);
+    launch_convert_f32_to_f16(B, b_half, K * N, stream);
+
+    constexpr int TILE_M = 256, TILE_N = 128, TILE_K = 32, PAD = 8;
+    constexpr int THREADS = ((TILE_M / 32) * (TILE_N / 32)) * 32;
 
     cudaFuncSetAttribute(
-        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K>,
+        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
         cudaFuncAttributePreferredSharedMemoryCarveout,
         cudaSharedmemCarveoutMaxShared);
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
-    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K>
-        <<<grid, threads, 0, stream>>>(M, N, K, A_h, B_h, C);
+    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
+        <<<grid, THREADS, 0, stream>>>(M, N, K, a_half, b_half, C);
 
     cudaStreamSynchronize(stream);
-    cudaFree(A_h);
-    cudaFree(B_h);
+    cudaFree(a_half);
+    cudaFree(b_half);
 }
 
