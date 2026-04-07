@@ -421,16 +421,40 @@ gemm_optimised_kernel(int m, int n, int k,
         }
     };
 
+    // auto store_a_to_smem = [&](int buf) {
+    //     int r  = tid / (TILE_K / 8);
+    //     int c8 = tid % (TILE_K / 8);
+    //     *reinterpret_cast<float4 *>(&tile_a[buf][r][c8 * 8]) = prefetch_a;
+    // };
+
     auto store_a_to_smem = [&](int buf) {
         int r  = tid / (TILE_K / 8);
         int c8 = tid % (TILE_K / 8);
-        *reinterpret_cast<float4 *>(&tile_a[buf][r][c8 * 8]) = prefetch_a;
+        int sc = c8 * 8;
+        __half *base = &tile_a[buf][r][sc];
+        __half2 *src = reinterpret_cast<__half2 *>(&prefetch_a);
+        reinterpret_cast<__half2 *>(base)[0] = src[0];
+        reinterpret_cast<__half2 *>(base)[1] = src[1];
+        reinterpret_cast<__half2 *>(base)[2] = src[2];
+        reinterpret_cast<__half2 *>(base)[3] = src[3];
     };
+
+    // auto store_b_to_smem = [&](int buf) {
+    //     int r  = tid / (TILE_N / 8);
+    //     int c8 = tid % (TILE_N / 8);
+    //     *reinterpret_cast<float4 *>(&tile_b[buf][r][c8 * 8]) = prefetch_b;
+    // };
 
     auto store_b_to_smem = [&](int buf) {
         int r  = tid / (TILE_N / 8);
         int c8 = tid % (TILE_N / 8);
-        *reinterpret_cast<float4 *>(&tile_b[buf][r][c8 * 8]) = prefetch_b;
+        int sc = c8 * 8;
+        __half *base = &tile_b[buf][r][sc];
+        __half2 *src = reinterpret_cast<__half2 *>(&prefetch_b);
+        reinterpret_cast<__half2 *>(base)[0] = src[0];
+        reinterpret_cast<__half2 *>(base)[1] = src[1];
+        reinterpret_cast<__half2 *>(base)[2] = src[2];
+        reinterpret_cast<__half2 *>(base)[3] = src[3];
     };
 
     auto compute_tile = [&](int buf) {
