@@ -450,14 +450,12 @@ void launch_gemm_optimised(
     const float *B,
     float *C,
     cudaStream_t stream) {
-    // 64 x 64 tile in C => (64 / 16) x (64 / 16) => 16 WMMA groups = 16 warps
-    // 16 * 32 = 512 threads
-
     constexpr int TILE_M = 64;
-    constexpr int TILE_N = 64;
-    constexpr int THREADS = 16 * 32;
+    constexpr int TILE_N = 128;
+    constexpr int TILE_K = 64;
+    constexpr int THREADS = (TILE_M / WMMA_SIZE) * (TILE_N / WMMA_SIZE) * warpSize;
 
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
-    gemm_optimised_kernel<TILE_M, TILE_N><<<grid, THREADS, 0, stream>>>(M, N, K, A, B, C);
+    gemm_optimised_kernel<TILE_M, TILE_N, TILE_K><<<grid, THREADS, 0, stream>>>(M, N, K, A, B, C);
     CUDA_CHECK_LAST("gemm_optimised_kernel");
 }
