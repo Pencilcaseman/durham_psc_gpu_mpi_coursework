@@ -7,10 +7,71 @@
   bibliography: bibliography("refs.bib"),
 )
 
-= GEMM Strong Scaling
+= Vector Triad
+
+// Graph scaling N
+// Report effective memory bandwidth
+// Explain
+
+#{
+  let xs = (0, 1, 2, 3, 4)
+
+  v(5mm)
+
+  [
+    #figure(
+      placement: none,
+      scope: "column",
+      lq.diagram(
+        title: [Vector Triad Memory Bandwidth],
+        xlabel: $x$,
+        ylabel: $y$,
+        width: 100%,
+
+        lq.plot(xs, (3, 5, 4, 2, 3), mark: "s", label: [A]),
+        lq.plot(
+          xs,
+          x => 2 * calc.cos(x) + 3,
+          mark: "o",
+          label: [B],
+        ),
+      ),
+      caption: [A caption for this figure],
+    )
+  ]
+}
+
+= Reduction
+
+// Explain reduction algorithm
+// Compare GPU results to CPU
+// Pick and justify floating point tolerance
+
+// Graph?
+
+= General Matrix Multiply (GEMM)
+
+== Problem Size Scaling
+
+// Grpah with performance against problem size for each algorithm
+// Table with results?
+// Explain
+
+== Strong Scaling
 
 // Fix problem size
-// Benchmark for number of ranks
+// Vary number of ranks
+// Plot runtime vs ranks
+// Discuss scaling
+// Explain impact of MPI communication relative to GPU computation
+
+== Profiled Results
+
+// Profile at least one multi-rank run
+// Identify:
+//  - GPU Idle time
+//  - What limits scaling?
+//  - What would you optimise next?
 
 #pagebreak()
 

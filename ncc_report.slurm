@@ -85,8 +85,8 @@ mkdir -p nsys_profiles
 for KERNEL in naive tiled optimised; do
     echo "--- profiling gemm $KERNEL NP=2 ---"
     mpiexec -np 2 nsys profile \
-        --trace=cuda,mpi --force-overwrite=true \
-        --output=nsys_profiles/gemm_${KERNEL}_np2 \
+        --trace=cuda,mpi --mpi-impl=mpich --force-overwrite=true \
+        --output=nsys_profiles/gemm_${KERNEL}_np2_rank%q{PMI_RANK} \
         $BIN --mode gemm --M 4096 --N 4096 --K 4096 \
         --kernel $KERNEL --csv $CSV
 done
