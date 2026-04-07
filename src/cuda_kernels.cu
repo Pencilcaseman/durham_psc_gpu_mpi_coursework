@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <mma.h>
 
 using namespace nvcuda;
@@ -342,14 +343,175 @@ void launch_gemm_tiled16(
 // Part B2 – Optimised GEMM
 // ═══════════════════════════════════════════════════════════════════════════════
 
-__global__ void k_gemm_optimised(
-    int M,
-    int N,
-    int K,
-    const float *__restrict__ A,
-    const float *__restrict__ B,
-    float *__restrict__ C) {
-    // TODO: implement optimised GEMM kernel
+constexpr static WMMA_SIZE = 16;
+
+// Call with a single warp -- 32 threads
+__device__ void gemm_microkernel_16x16x16(
+    int m,
+    int n,
+    int k,
+    int c_row, // Row of tile in C assuming WMMA_SIZE tiles
+    int c_col, // Column of tile in C assuming WMMA_SIZE tiles
+    const float *__restrict__ mat_a,
+    const float *__restrict__ mat_b,
+    float *__restrict__ mat_c
+) {
+    // 32 threads
+    // 16 * 16 = 256 elements
+    // Each thread handles 8 elements
+
+    __shared__ __half a_tile[WMMA_SIZE][WMMA_SIZE];
+    __shared__ __half b_tile[WMMA_SIZE][WMMA_SIZE];
+
+    __shared__ float c_tile[WMMA_SIZE][WMMA_SIZE];
+
+    int tid = threadIdx.x;
+
+    wmma::fragment<wmma::matrix_a, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, half, wmma::row_major> b_frag;
+    wmma::fragment<wmma::accumulator, WMMA_SIZE, WMMA_SIZE, WMMA_SIZE, float> acc_frag;
+
+    wmma::fill_fragment(acc_frag, 0.0f);
+
+    for (int inner = 0; inner < k / WMMA_SIZE; inner++) {
+        // Copy and cast into tiles
+        for (int i = tid; i < WMMA_SIZE * WMMA_SIZE; i += warpSize) {
+            int row = i / WMMA_SIZE;
+            int col = i % WMMA_SIZE;
+
+            a_tile[row][col] = __float2half(
+                mat_a[
+                    (c_row * WMMA_SIZE + row) * k
+                    + (inner * WMMA_SIZE + col)
+                ]
+            );
+
+            b_tile[row][col] = __float2half(
+                mat_a[
+                    (inner * WMMA_SIZE + row) * n
+                    + (c_col * WMMA_SIZE + col)
+                ]
+            );
+        }
+
+        __syncwarp();
+
+        // Load fragments
+        wmma::load_matrix_sync(a_frag, a_tile, WMMA_SIZE);
+        wmma::load_matrix_sync(b_frag, b_tile, WMMA_SIZE);
+
+        // Perform matmul
+        wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
+    }
+
+    // Write to C
+    int offset = (c_row * WMMA_SIZE) + (c_col * WMMA_SIZE);
+    wmma::store_matrix_sync(mat_c + offset, acc_frag, n, wmma::mem_row_major);
+}
+
+template<int TILE_M = 64, int TILE_N = 64, int TILE_K = 64>
+__global__ void gemm_optimised_kernel(
+    int m,
+    int n,
+    int k,
+    const float *__restrict__ mat_a,
+    const float *__restrict__ mat_b,
+    float *__restrict__ mat_c) {
+    // Each block computes a TILE_M x TILE_N region of C
+
+    // Create shared tile_a[TILE_M][TILE_K]
+    // Create shared tile_b[TILE_K][TILE_N]
+
+    // Cooperatively load tile_a and tile_b, converting to __half
+
+    // Each warp handles a WMMA_SIZE x WMMA_SIZE tile.
+    // 64 x 64 => (64 / 16) * (64 / 16) = 16 wmma groups = 16 warps
+    // 16 warps => 16 * 32 = 512 threads per block
+
+    // ==========
+
+    __shared__ __half tile_a[TILE_M][TILE_K];
+    __shared__ __half tile_b[TILE_K][TILE_N];
+
+    int tid = threadIdx.x;
+
+    int block_row = blockIdx.y * TILE_M;
+    int block_col = blockIdx.x * TILE_N;
+
+    int warp_id = tid / warpSize;
+
+    int warp_tile_row = warp_id / (TILE_N / WMMA_SIZE);
+    int warp_tile_col = warp_id % (TILE_N / WMMA_SIZE);
+
+    wmma::fragment<
+        wmma::matrix_a,
+        WMMA_SIZE,
+        WMMA_SIZE,
+        WMMA_SIZE,
+        __half,
+        wmma::row_major
+    > frag_a;
+
+    wmma::fragment<
+        wmma::matrix_b,
+        WMMA_SIZE,
+        WMMA_SIZE,
+        WMMA_SIZE,
+        __half,
+        wmma::row_major
+    > frag_b;
+
+    wmma::fragment<
+        wmma::accumulator,
+        WMMA_SIZE,
+        WMMA_SIZE,
+        WMMA_SIZE,
+        float
+    > frag_acc;
+
+    wmma::fill_fragment(frag_acc, 0.0f);
+
+    for (int inner = 0; inner < k; inner += TILE_K) {
+        // Load tile_a
+        for (int i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+            int r = i / TILE_K;
+            int c = i % TILE_K;
+            int global_r = block_row + r;
+            int global_c = inner + c;
+            tile_a[r][c] = (global_r < m && global_c < k)
+                            ? __float2half(mat_a[global_r * k + global_c])
+                            : __half(0);
+        }
+
+        // Load tile_b
+        for (int i = tid; i < TILE_K * TILE_N; i += blockDim.x) {
+            int r = i / TILE_N;
+            int c = i % TILE_N;
+            int global_r = inner + r;
+            int global_c = block_col + c;
+            tile_b[r][c] = (global_r < k && global_c < n)
+                            ? __float2half(mat_b[global_r * n + global_c])
+                            : __half(0);
+        }
+
+        __syncthreads();
+
+        // WMMA subtile per warp
+        for (int kk = 0; kk < TILE_K; kk += WMMA_SIZE) {
+            wmma::load_matrix_sync(frag_a, &tile_a[warp_tile_row * WMMA_SIZE][kk], TILE_K);
+            wmma::load_matrix_sync(frag_b, &tile_b[kk][warp_tile_col * WMMA_SIZE], TILE_N);
+            wmma::mma_sync(frag_acc, frag_a, frag_b, frag_acc);
+        }
+
+        __syncthreads();
+    }
+
+    // Write back to C
+    int c_row = block_row + warp_tile_row * WMMA_SIZE;
+    int c_col = block_col + warp_tile_col * WMMA_SIZE;
+    if (c_row < m && c_col < n) {
+        wmma::store_matrix_sync(&mat_c[c_row * n + c_col], frag_acc, n, wmma::mem_row_major);
+    }
 }
 
 void launch_gemm_optimised(
@@ -360,7 +522,14 @@ void launch_gemm_optimised(
     const float *B,
     float *C,
     cudaStream_t stream) {
-    // TODO: choose block/grid dims and launch k_gemm_optimised
-    k_gemm_optimised<<<1, 1, 0, stream>>>(M, N, K, A, B, C);
-    CUDA_CHECK_LAST("k_gemm_optimised");
+    // 64 x 64 tile in C => (64 / 16) x (64 / 16) => 16 WMMA groups = 16 warps
+    // 16 * 32 = 512 threads
+
+    constexpr int TILE_M = 64;
+    constexpr int TILE_N = 64;
+    constexpr int THREADS = 16 * 32;
+
+    dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
+    gemm_optimised_kernel<TILE_M, TILE_N><<<grid, THREADS, 0, stream>>>(M, N, K, A, B, C);
+    CUDA_CHECK_LAST("gemm_optimised_kernel");
 }
