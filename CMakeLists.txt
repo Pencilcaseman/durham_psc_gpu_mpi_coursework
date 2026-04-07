@@ -45,13 +45,12 @@ set_target_properties(
     mpi_cuda_coursework
     PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
-        CUDA_ARCHITECTURES
-            "75" # 75=Turing (2080 Ti)
+        CUDA_ARCHITECTURES OFF
 )
 
 target_compile_options(
     mpi_cuda_coursework
-    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-arch=sm_75 -lineinfo>
 )
 
 # ── Test executable ────────────────────────────────────────────────────────────
@@ -68,5 +67,10 @@ endif()
 
 set_target_properties(
     mpi_cuda_tests
-    PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES "75"
+    PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES OFF
+)
+
+target_compile_options(
+    mpi_cuda_tests
+    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-arch=sm_75>
 )
