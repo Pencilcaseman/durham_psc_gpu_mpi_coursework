@@ -18,4 +18,4 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j
 popd
 
-mpiexec -np 2 ./build/mpi_cuda_tests
+mpiexec -np 2 ./slurm_build/mpi_cuda_tests
