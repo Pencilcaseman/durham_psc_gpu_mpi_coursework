@@ -1,6 +1,20 @@
 list:
     just --list --unsorted
 
+writeup-build:
+    #!/bin/bash
+
+    pushd writeup/template
+    typst compile report.typ --root ..
+    popd
+
+writeup-watch:
+    #!/bin/bash
+
+    pushd writeup/template
+    typst watch report.typ --root ..
+    popd
+
 configure CONFIG FLAGS="":
     #!/bin/bash
     set -euxo pipefail

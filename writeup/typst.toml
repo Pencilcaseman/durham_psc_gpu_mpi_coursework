@@ -1,0 +1,17 @@
+[package]
+name = "simple_repot"
+version = "0.1.0"
+compiler = "0.14.0"
+entrypoint = "lib.typ"
+repository = "https://github.com/Pencilcaseman/typst_templates"
+authors = ["Toby Davis"]
+license = "MIT"
+description = "A simple report template"
+keywords = ["Computer Science", "Computer Engineering", "Software"]
+categories = ["paper", "report"]
+disciplines = ["computer-science", "engineering"]
+
+[template]
+path = "template"
+entrypoint = "main.typ"
+# thumbnail = "thumbnail.png"
