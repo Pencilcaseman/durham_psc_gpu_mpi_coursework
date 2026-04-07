@@ -346,7 +346,7 @@ void launch_convert_f32_to_f16(const float *in, __half *out, int count,
 // must equal 0 % 8. This could probably be improved by writing inline PTX, but
 // that is a lot of work :/
 template <int TILE_M = 128, int TILE_N = 128, int TILE_K = 32, int PAD = 8>
-__global__ void __launch_bounds__(512, 1)
+__global__ void __launch_bounds__(1024, 1)
 gemm_optimised_kernel(int m, int n, int k,
                       const __half *__restrict__ mat_a,
                       const __half *__restrict__ mat_b,
@@ -567,6 +567,7 @@ void launch_gemm_optimised(int M, int N, int K,
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
         <<<grid, THREADS, 0, stream>>>(M, N, K, a_half, b_half, C);
+    CUDA_CHECK_LAST("gemm_optimised_kernel");
 
     cudaStreamSynchronize(stream);
     cudaFree(a_half);
