@@ -92,7 +92,9 @@ compiled using CUDA 12.4 and Intel OneAPI MPI 2024.1.0.
       width: 100%,
       height: 4.75cm,
       xscale: "log",
-      ylim: (0, auto),
+      yscale: "log",
+      ylim: (0.0002, auto),
+      xlim: (1, auto),
       legend: (position: right + bottom),
 
       lq.plot(
@@ -443,10 +445,10 @@ faster than the tiled version and yet has an error of just $0.011714$.
           let pct = r.gbs / total * 100
           (
             [#r.num_ranks],
-            [#calc.round(r.ms, digits: 1)],
-            [#calc.round(r.gbs, digits: 1)],
-            [#calc.round(total, digits: 1)],
-            [#calc.round(pct, digits: 1)%],
+            [#calc.round(r.ms, digits: 3)],
+            [#calc.round(r.gbs, digits: 3)],
+            [#calc.round(total, digits: 3)],
+            [#calc.round(pct, digits: 3)%],
           )
         })
         .flatten(),
