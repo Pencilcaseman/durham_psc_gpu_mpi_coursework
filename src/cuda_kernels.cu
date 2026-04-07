@@ -356,8 +356,12 @@ gemm_optimised_kernel(int m, int n, int k,
     constexpr int LD_B = TILE_N + PAD;
     constexpr int WARPS_N = TILE_N / (WMMA_SIZE * 2);
 
-    __shared__ __half tile_a[2][TILE_M][LD_A];
-    __shared__ __half tile_b[2][TILE_K][LD_B];
+    extern __shared__ char smem_raw[];
+    __half (*tile_a)[TILE_M][LD_A] =
+        reinterpret_cast<__half (*)[TILE_M][LD_A]>(smem_raw);
+    __half (*tile_b)[TILE_K][LD_B] =
+        reinterpret_cast<__half (*)[TILE_K][LD_B]>(
+            smem_raw + sizeof(__half) * 2 * TILE_M * LD_A);
 
     const int tid = threadIdx.x;
     const int block_row = blockIdx.y * TILE_M;
@@ -558,15 +562,24 @@ void launch_gemm_optimised(int M, int N, int K,
 
     constexpr int TILE_M = 256, TILE_N = 128, TILE_K = 32, PAD = 8;
     constexpr int THREADS = ((TILE_M / 32) * (TILE_N / 32)) * 32;
+    constexpr int LD_A = TILE_K + PAD;
+    constexpr int LD_B = TILE_N + PAD;
+    constexpr size_t SMEM_BYTES =
+        sizeof(__half) * (2 * TILE_M * LD_A + 2 * TILE_K * LD_B);
 
     cudaFuncSetAttribute(
         gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
         cudaFuncAttributePreferredSharedMemoryCarveout,
         cudaSharedmemCarveoutMaxShared);
 
+    cudaFuncSetAttribute(
+        gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        SMEM_BYTES);
+
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
     gemm_optimised_kernel<TILE_M, TILE_N, TILE_K, PAD>
-        <<<grid, THREADS, 0, stream>>>(M, N, K, a_half, b_half, C);
+        <<<grid, THREADS, SMEM_BYTES, stream>>>(M, N, K, a_half, b_half, C);
     CUDA_CHECK_LAST("gemm_optimised_kernel");
 
     cudaStreamSynchronize(stream);
