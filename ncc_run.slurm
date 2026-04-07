@@ -2,7 +2,7 @@
 #SBATCH --job-name=mpi-cuda-run
 #SBATCH --partition=ug-gpu-small
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
+#SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:turing:1
 #SBATCH --cpus-per-task=1
 #SBATCH --time=00:05:00

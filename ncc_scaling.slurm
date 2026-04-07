@@ -3,10 +3,12 @@
 #SBATCH --partition=ug-gpu-small
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --gres=gpu:turing:1        # single GPU shared by all ranks
-#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:turing:1
+#SBATCH --cpus-per-task=1
 #SBATCH --time=00:30:00
-#SBATCH --output=scaling-%j.out
+#SBATCH --output=slurm_output/scaling-%j.out
+
+set -euxo pipefail
 
 module purge
 module load cuda/12.4
@@ -17,12 +19,36 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j
 cd ..
 
-# Strong scaling: fix global problem size, vary number of MPI ranks
-for KERNEL in naive tiled optimised; do
+CSV=scaling_results.csv
+
+# Vector operations: vary size and ranks
+for MODE in axpy add copy; do
+    for N in 1000000 10000000 50000000 100000000; do
+        for NP in 1 2 4; do
+            echo "=== $MODE N=$N NP=$NP ==="
+            mpiexec -np $NP build/mpi_cuda_coursework \
+                --mode $MODE --N $N --csv $CSV
+        done
+    done
+done
+
+# Reduce: vary size and ranks
+for N in 1000000 10000000 50000000 100000000; do
     for NP in 1 2 4; do
-        echo "=== kernel=$KERNEL NP=$NP ==="
+        echo "=== reduce N=$N NP=$NP ==="
         mpiexec -np $NP build/mpi_cuda_coursework \
-            --mode gemm --M 4096 --N 4096 --K 4096 \
-            --kernel $KERNEL --csv results_${KERNEL}_np${NP}.csv
+            --mode reduce --N $N --csv $CSV
+    done
+done
+
+# GEMM: vary size, kernel, and ranks
+for KERNEL in naive tiled optimised; do
+    for SIZE in 512 1024 2048 4096; do
+        for NP in 1 2 4; do
+            echo "=== gemm kernel=$KERNEL M=$SIZE N=$SIZE K=$SIZE NP=$NP ==="
+            mpiexec -np $NP build/mpi_cuda_coursework \
+                --mode gemm --M $SIZE --N $SIZE --K $SIZE \
+                --kernel $KERNEL --csv $CSV
+        done
     done
 done
