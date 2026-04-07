@@ -29,7 +29,11 @@ for MODE in axpy add copy; do
             mpiexec -np $NP build/mpi_cuda_coursework \
                 --mode $MODE --N $N --csv $CSV
         done
+
+        echo ""
     done
+
+    echo ""
     echo ""
 done
 
@@ -45,7 +49,7 @@ done
 
 # GEMM: vary size, kernel, and ranks
 for KERNEL in naive tiled optimised; do
-    for SIZE in 512 1024 2048 4096; do
+    for SIZE in 512 1024 2048 4096 8192 16384; do
         for NP in 1 2 4; do
             echo "=== gemm kernel=$KERNEL M=$SIZE N=$SIZE K=$SIZE NP=$NP ==="
             mpiexec -np $NP build/mpi_cuda_coursework \
