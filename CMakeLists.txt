@@ -46,7 +46,7 @@ set_target_properties(
     PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_ARCHITECTURES
-            "70;75;80" # 70=V100, 75=Turing, 80=A100
+            "75" # 75=Turing (2080 Ti)
 )
 
 target_compile_options(
@@ -68,5 +68,5 @@ endif()
 
 set_target_properties(
     mpi_cuda_tests
-    PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES "61;70;75;80"
+    PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES "75"
 )
