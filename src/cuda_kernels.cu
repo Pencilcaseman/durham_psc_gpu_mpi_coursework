@@ -7,8 +7,6 @@
 #include <cuda_fp16.h>
 #include <mma.h>
 
-using namespace nvcuda;
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Part A1 – Vector operations
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -354,17 +352,11 @@ __global__ void gemm_optimised_kernel(
     const float *__restrict__ mat_b,
     float *__restrict__ mat_c) {
     // Each block computes a TILE_M x TILE_N region of C
-
-    // Create shared tile_a[TILE_M][TILE_K]
-    // Create shared tile_b[TILE_K][TILE_N]
-
-    // Cooperatively load tile_a and tile_b, converting to __half
-
     // Each warp handles a WMMA_SIZE x WMMA_SIZE tile.
     // 64 x 64 => (64 / 16) * (64 / 16) = 16 wmma groups = 16 warps
     // 16 warps => 16 * 32 = 512 threads per block
 
-    // ==========
+    namespace wmma = nvcuda::wmma;
 
     __shared__ __half tile_a[TILE_M][TILE_K];
     __shared__ __half tile_b[TILE_K][TILE_N];
